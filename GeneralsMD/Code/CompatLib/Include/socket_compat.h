@@ -216,8 +216,7 @@ inline void OutputDebugString(const char* lpOutputString) {
 
 // GeneralsX @build rpi5 11/10/2026 strlcpy/strlcat (FTP.cpp, Download.cpp) come from libc
 // where it has them (glibc 2.38+, macOS) and from Utility/stringex.h otherwise (glibc 2.36 on
-// Debian 12 / Raspberry Pi OS). The weak extern "C" copies that used to live here conflicted
-// with stringex.h's fallback declarations on libcs without them.
-#include <Utility/stringex.h>
+// Debian 12 / Raspberry Pi OS), which every caller already includes via WWLib/WWCommon.h.
+// The weak extern "C" copies that used to live here conflicted with stringex.h's fallbacks.
 
 #endif // !_WIN32
