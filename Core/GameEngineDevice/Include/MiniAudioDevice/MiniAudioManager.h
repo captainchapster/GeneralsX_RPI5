@@ -84,8 +84,6 @@ public:
 	virtual AsciiString nextMusicTrack(void);
 	virtual AsciiString prevMusicTrack(void);
 	virtual Bool isMusicPlaying(void) const;
-	// GeneralsX @tweak rpi5 11/10/2026 Number of music tracks in the playing list (console trace).
-	UnsignedInt countPlayingMusic(void) const;
 	virtual Bool hasMusicTrackCompleted(const AsciiString& trackName, Int numberOfTimes) const;
 	virtual AsciiString getMusicTrackName(void) const;
 

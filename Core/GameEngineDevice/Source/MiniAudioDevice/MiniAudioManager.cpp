@@ -454,14 +454,6 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	audio->m_sound = sound;
 	audio->m_audioBuffer = audioBuffer;
 
-	// GeneralsX @tweak rpi5 11/10/2026 Trace music starts and stops on the console to diagnose
-	// overlapping menu music on the Pi.
-	if (info->m_soundType == AT_Music) {
-		fprintf(stderr, "[Music] play '%s' handle=%u file='%s' (music playing before: %u)\n",
-			event->getEventName().str(), (unsigned)event->getPlayingHandle(), fileToPlay.str(), countPlayingMusic());
-		fflush(stderr);
-	}
-
 	switch (info->m_soundType)
 	{
 	case AT_Music:
@@ -538,9 +530,6 @@ void MiniAudioManager::stopAudioEvent(AudioHandle handle)
 			const AudioEventInfo *stopInfo = audio->m_audioEventRTS->getAudioEventInfo();
 			if (stopInfo && stopInfo->m_soundType == AT_Music)
 			{
-				fprintf(stderr, "[Music] stop '%s' handle=%u%s\n", audio->m_audioEventRTS->getEventName().str(),
-					(unsigned)audio->m_audioEventRTS->getPlayingHandle(), handle == AHSV_StopTheMusicFade ? " (fade)" : "");
-				fflush(stderr);
 				if (handle == AHSV_StopTheMusicFade)
 					m_fadingAudio.push_back(audio);
 				else
@@ -633,12 +622,6 @@ void MiniAudioManager::releasePlayingAudio(PlayingAudio *release)
 
 	const AudioEventInfo *releaseInfo = release->m_audioEventRTS
 		? release->m_audioEventRTS->getAudioEventInfo() : nullptr;
-
-	if (releaseInfo && releaseInfo->m_soundType == AT_Music) {
-		fprintf(stderr, "[Music] release '%s' handle=%u loops=%d\n", release->m_audioEventRTS->getEventName().str(),
-			(unsigned)release->m_audioEventRTS->getPlayingHandle(), release->m_loopsCompleted);
-		fflush(stderr);
-	}
 
 	if (releaseInfo && releaseInfo->m_soundType == AT_SoundEffect && release->m_sound) {
 		if (release->m_type == PAT_Sample) {
@@ -771,19 +754,6 @@ AsciiString MiniAudioManager::prevMusicTrack(void)
 Bool MiniAudioManager::isMusicPlaying(void) const
 {
 	return ma_sound_group_is_playing(&m_musicGroup) == MA_TRUE;
-}
-
-//-------------------------------------------------------------------------------------------------
-UnsignedInt MiniAudioManager::countPlayingMusic(void) const
-{
-	UnsignedInt count = 0;
-	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
-		const PlayingAudio *playing = *it;
-		if (playing && playing->m_audioEventRTS && playing->m_audioEventRTS->getAudioEventInfo() &&
-			playing->m_audioEventRTS->getAudioEventInfo()->m_soundType == AT_Music)
-			++count;
-	}
-	return count;
 }
 
 //-------------------------------------------------------------------------------------------------
