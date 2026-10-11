@@ -303,6 +303,7 @@ Name=Command & Conquer Generals (GeneralsX)
 Comment=Cross-platform Generals runtime
 Exec=GeneralsX
 Icon=GeneralsX
+StartupWMClass=com.fbraz3.GeneralsX
 Categories=Game;StrategyGame;
 Terminal=false
 EOF

@@ -5,12 +5,14 @@
 #
 # Usage:
 #   ./scripts/build/linux/install-pi5-desktop.sh            # install or update
-#   ./scripts/build/linux/install-pi5-desktop.sh --remove   # remove the menu entry
+#   ./scripts/build/linux/install-pi5-desktop.sh --remove   # remove the menu entry and desktop icon
+#   ./scripts/build/linux/install-pi5-desktop.sh --no-desktop-icon   # menu entry only
 #
 # Installs:
 #   ~/.local/bin/generalsx-zh                               launcher, logs to ~/GeneralsX/logs/zh-last-run.log
 #   ~/.local/share/applications/generalsx-zh.desktop        menu entry
 #   ~/.local/share/icons/generalsx-zh.png                   icon
+#   ~/Desktop/generalsx-zh.desktop                          desktop icon (skip with --no-desktop-icon)
 #
 # The launcher calls run-pi5-zh.sh from this checkout, so run deploy-linux-zh.sh linux-aarch64
 # after each build as usual. Re-run this script if the checkout moves.
@@ -26,6 +28,8 @@ BIN_DIR="${HOME}/.local/bin"
 LAUNCHER="${BIN_DIR}/generalsx-zh"
 DESKTOP_FILE="${DATA_HOME}/applications/generalsx-zh.desktop"
 ICON_FILE="${DATA_HOME}/icons/generalsx-zh.png"
+DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "${HOME}/Desktop")"
+DESKTOP_ICON="${DESKTOP_DIR}/generalsx-zh.desktop"
 
 refresh_menu() {
   if command -v update-desktop-database >/dev/null 2>&1; then
@@ -34,7 +38,7 @@ refresh_menu() {
 }
 
 if [[ "${1:-}" == "--remove" ]]; then
-  rm -f "${LAUNCHER}" "${DESKTOP_FILE}" "${ICON_FILE}"
+  rm -f "${LAUNCHER}" "${DESKTOP_FILE}" "${ICON_FILE}" "${DESKTOP_ICON}"
   refresh_menu
   echo "Removed the Zero Hour menu entry."
   exit 0
@@ -73,10 +77,24 @@ Icon=${ICON_FILE}
 Terminal=false
 Categories=Game;StrategyGame;
 StartupNotify=true
+StartupWMClass=com.fbraz3.GeneralsXZH
 EOF
 chmod 644 "${DESKTOP_FILE}"
 
 refresh_menu
+
+if [[ "${1:-}" != "--no-desktop-icon" && -d "${DESKTOP_DIR}" ]]; then
+  cp "${DESKTOP_FILE}" "${DESKTOP_ICON}"
+  # File managers only launch desktop files that are executable and marked trusted;
+  # Xfce also checks a checksum of the file.
+  chmod +x "${DESKTOP_ICON}"
+  if command -v gio >/dev/null 2>&1; then
+    gio set "${DESKTOP_ICON}" metadata::trusted true >/dev/null 2>&1 || true
+    gio set -t string "${DESKTOP_ICON}" metadata::xfce-exe-checksum \
+      "$(sha256sum "${DESKTOP_ICON}" | cut -d' ' -f1)" >/dev/null 2>&1 || true
+  fi
+  echo "Added a desktop icon: ${DESKTOP_ICON}"
+fi
 
 echo "Installed the Zero Hour menu entry (Games > C&C Generals Zero Hour)."
 echo "Launcher: ${LAUNCHER}"

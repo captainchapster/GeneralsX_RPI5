@@ -274,6 +274,10 @@ int main(int argc, char* argv[])
 			fprintf(stderr, "INFO: Headless mode detected, skipping SDL3 video/Vulkan window initialization\n");
 		} else {
 
+		// GeneralsX @feature rpi5 11/10/2026 Give the window a stable app ID (X11 WM_CLASS, Wayland app_id)
+		// that matches the .desktop files, so taskbars show the game icon and group it with its launcher.
+		SDL_SetAppMetadata("Command & Conquer Generals Zero Hour", nullptr, "com.fbraz3.GeneralsXZH");
+
 		// GeneralsX @bugfix felipebraz 16/02/2026
 		// Initialize SDL3 and Vulkan BEFORE creating GameEngine (fighter19 pattern)
 		// This prevents LLVM SIGSEGV crash during Vulkan driver enumeration
