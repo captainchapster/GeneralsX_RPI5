@@ -591,9 +591,8 @@ static void SDL3_CenterWindowOnCurrentDisplay(SDL_Window* window, Int width, Int
 // the whole panel. A mode with the desktop's shape (2560x1080 on a 21:9 panel, say) keeps the cost low
 // and lets the pillarbox in DX8Wrapper center the game image with black bars, as desktop fullscreen
 // does. Prefers the smallest such mode at least as tall as the render size, below the monitor's largest
-// (native) mode. The desktop may already be in such a mode: run-pi5-zh.sh switches to it before launch
-// so the monitor has re-synced before the intro starts. Falls back to the closest mode to the render
-// size when the monitor offers no such mode.
+// (native) mode. Falls back to the closest mode to the render size when the monitor offers no such
+// mode.
 static bool SDL3_PickExclusiveFullscreenMode(SDL_DisplayID displayId, Int renderWidth, Int renderHeight,
 	SDL_DisplayMode& outMode)
 {
@@ -649,6 +648,7 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 	extern SDL_Window* TheSDL3Window;
 	if (!TheSDL3Window) return;
 
+	bool displayModeChanges = false;
 	if (!windowed) {
 		if (!SDL_SetWindowFullscreen(TheSDL3Window, false)) {
 			fprintf(stderr, "WARNING: SDL_SetWindowFullscreen(false) failed: %s\n", SDL_GetError());
@@ -670,6 +670,9 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 				exclusiveMode.w, exclusiveMode.h, exclusiveMode.refresh_rate, renderWidth, renderHeight);
 			if (!SDL_SetWindowFullscreenMode(TheSDL3Window, &exclusiveMode)) {
 				fprintf(stderr, "WARNING: SDL_SetWindowFullscreenMode(exclusive) failed: %s\n", SDL_GetError());
+			}
+			else if (!mode || mode->w != exclusiveMode.w || mode->h != exclusiveMode.h) {
+				displayModeChanges = true;
 			}
 		}
 		else if (mode) {
@@ -723,6 +726,23 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 			fprintf(stderr, "WARNING: SDL_SetWindowFullscreen(true) failed: %s\n", SDL_GetError());
 		}
 		SDL3_EnsureNativeFullscreen(TheSDL3Window);
+	}
+
+	// GeneralsX @bugfix rpi5 11/10/2026 A monitor shows nothing for a second or two while it re-syncs
+	// to a new display mode, and there is no event for when it is done. Starting the intro straight
+	// after an exclusive mode switch played the EA logo movie to a blank screen (only its audio came
+	// through), so wait for the monitor here, before anything is drawn. GENERALSX_MODE_SWITCH_SETTLE_MS
+	// overrides the wait.
+	if (displayModeChanges) {
+		Uint64 settleMs = 2000;
+		const char* settleEnv = getenv("GENERALSX_MODE_SWITCH_SETTLE_MS");
+		if (settleEnv && settleEnv[0] != '\0')
+			settleMs = (Uint64)strtoul(settleEnv, nullptr, 10);
+		const Uint64 until = SDL_GetTicks() + settleMs;
+		while (SDL_GetTicks() < until) {
+			SDL_PumpEvents();
+			SDL_Delay(10);
+		}
 	}
 }
 #endif

@@ -890,14 +890,6 @@ void MiniAudioManager::openDevice(void)
 
 	engineConfig = ma_engine_config_init();
 	engineConfig.pResourceManager = &m_resourceManager;
-	// GeneralsX @tweak rpi5 11/10/2026 GENERALSX_AUDIO_PERIOD_MS sets the device period. miniaudio's
-	// default is short, and outputs with more latency (Bluetooth through PulseAudio/PipeWire) or a busy
-	// CPU can underrun with it, which is heard as crackles.
-	const char* periodEnv = getenv("GENERALSX_AUDIO_PERIOD_MS");
-	if (periodEnv && atoi(periodEnv) > 0) {
-		engineConfig.periodSizeInMilliseconds = (ma_uint32)atoi(periodEnv);
-		fprintf(stderr, "AUDIO: MiniAudio period %u ms\n", engineConfig.periodSizeInMilliseconds);
-	}
 
 	result = ma_engine_init(&engineConfig, &m_engine);
 	if (result != MA_SUCCESS) {
