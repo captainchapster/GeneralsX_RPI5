@@ -23,6 +23,9 @@ cd "${PROJECT_ROOT}"
 echo "== GeneralsX Pi 5 build at $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 uname -m
 
+# libgbm-dev is left out on purpose: it must match the installed Mesa exactly, and
+# Pi setups that pin Mesa (e.g. alongside armhf/box86 packages) cannot install it.
+# SDL3 only needs it for its KMSDRM backend, which the desktop build doesn't use.
 if [[ "${SKIP_APT:-0}" != "1" ]]; then
   echo "== Installing build dependencies"
   sudo apt-get update
@@ -33,7 +36,7 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
     libvulkan-dev vulkan-tools \
     libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
     libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-    libdrm-dev libgbm-dev libegl-dev libgles-dev \
+    libdrm-dev libegl-dev libgles-dev \
     libasound2-dev libpulse-dev libudev-dev libdbus-1-dev libdisplay-info-dev
 fi
 
