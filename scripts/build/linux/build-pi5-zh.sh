@@ -32,7 +32,7 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
   sudo apt-get install -y \
     build-essential git curl zip unzip tar pkg-config ninja-build meson \
     autoconf autoconf-archive automake libtool bison flex gperf nasm \
-    python3 python3-venv python3-pip glslang-tools \
+    python3 python3-venv python3-pip glslang-tools patchelf \
     libvulkan-dev vulkan-tools \
     libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
     libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
@@ -72,3 +72,6 @@ cmake --build "${BUILD_DIR}" --target dxvk_d3d8_install
 echo
 echo "== Done"
 ls -la "${BUILD_DIR}/GeneralsMD/GeneralsXZH" "${BUILD_DIR}"/libdxvk_d3d*.so*
+echo
+echo "Deploy with: ./scripts/build/linux/deploy-linux-zh.sh ${PRESET}"
+echo "Then run:    ./scripts/build/linux/run-pi5-zh.sh -win"
