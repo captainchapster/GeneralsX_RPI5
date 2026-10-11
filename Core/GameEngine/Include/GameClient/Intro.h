@@ -37,6 +37,8 @@ public:
 
 	Bool skipCurrentIntroStage();
 	Bool isDone() const { return m_currentState == IntroState_Done; }
+	// GeneralsX @bugfix rpi5 11/10/2026 True while the current or a later intro stage is enabled.
+	Bool isPlaying() const { return (m_allowedStateFlags >> m_currentState) != 0; }
 
 private:
 

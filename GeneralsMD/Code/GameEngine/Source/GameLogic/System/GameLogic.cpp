@@ -3901,7 +3901,11 @@ void GameLogic::update()
 	setFPMode();
 
 	/// @todo remove this hack
-	if ( m_startNewGame && !TheDisplay->isMoviePlaying())
+	// GeneralsX @bugfix rpi5 11/10/2026 Also wait for the whole intro sequence, not just the current
+	// movie. The intro pauses between the EA logo and the sizzle movie, and the shell map queued by
+	// MainMenuInit() used to load in that gap. Its scripts then started the menu music under the
+	// sizzle movie, which carries the same track, so the music played twice.
+	if ( m_startNewGame && !TheDisplay->isMoviePlaying() && !(TheGameClient && TheGameClient->isIntroPlaying()))
 	{
 	#ifdef DUMP_PERF_STATS
 		Total_Get_Texture_Time=0;

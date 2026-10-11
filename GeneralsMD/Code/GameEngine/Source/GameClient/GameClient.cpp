@@ -772,6 +772,12 @@ void GameClient::updateHeadless()
 	TheParticleSystemManager->update();
 }
 
+// GeneralsX @bugfix rpi5 11/10/2026 Lets GameLogic hold the shell map until the intro has finished.
+Bool GameClient::isIntroPlaying() const
+{
+	return m_intro != nullptr && m_intro->isPlaying();
+}
+
 Bool GameClient::skipCurrentIntroStage()
 {
 	if (m_intro != nullptr)
