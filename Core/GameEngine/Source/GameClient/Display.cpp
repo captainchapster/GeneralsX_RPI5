@@ -216,6 +216,9 @@ void Display::playMovie( AsciiString movieName)
 	}
 
 	m_currentlyPlayingMovie = movieName;
+	// GeneralsX @tweak rpi5 11/10/2026 Trace movie start/stop next to the [Music] trace.
+	fprintf(stderr, "[Music] movie start '%s'\n", movieName.str());
+	fflush(stderr);
 
 	m_videoBuffer = createVideoBuffer();
 	if (	m_videoBuffer == nullptr ||
@@ -240,6 +243,8 @@ void Display::stopMovie()
 
 	if ( m_videoStream )
 	{
+		fprintf(stderr, "[Music] movie stop '%s'\n", m_currentlyPlayingMovie.str());
+		fflush(stderr);
 		m_videoStream->close();
 		m_videoStream = nullptr;
 	}

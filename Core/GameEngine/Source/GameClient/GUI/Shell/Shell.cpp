@@ -575,6 +575,9 @@ void Shell::showShellMap(Bool useShellMap )
 		GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_NEW_GAME );
 		msg->appendIntegerArgument(GAME_SHELL);
 		m_shellMapOn = TRUE;
+		// GeneralsX @tweak rpi5 11/10/2026 Trace shell map loads next to the [Music] trace.
+		fprintf(stderr, "[Music] shell map load queued '%s'\n", TheGlobalData->m_shellMapName.str());
+		fflush(stderr);
 	}
 	else
 	{
