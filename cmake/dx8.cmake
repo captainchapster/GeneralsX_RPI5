@@ -18,6 +18,15 @@
 
 set(DXVK_VERSION "v2.6")
 
+# GeneralsX @build rpi5 11/10/2026 The prebuilt DXVK native tarball only ships x86/x86-64
+# libraries, so other Linux architectures (aarch64: Raspberry Pi 5) build DXVK from source.
+if(UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86)$")
+  set(SAGE_DXVK_FROM_SOURCE_DEFAULT ON)
+else()
+  set(SAGE_DXVK_FROM_SOURCE_DEFAULT OFF)
+endif()
+option(SAGE_DXVK_FROM_SOURCE "Linux: build DXVK from source instead of the prebuilt x86-64 tarball" ${SAGE_DXVK_FROM_SOURCE_DEFAULT})
+
 if(SAGE_USE_DX8)
   # Windows: Fetch min-dx8-sdk for native DirectX 8
   FetchContent_Declare(
@@ -192,6 +201,89 @@ elseif(APPLE AND SAGE_USE_MOLTENVK)
   set(dxvk_SOURCE_DIR "${DXVK_SOURCE_DIR}" CACHE PATH "DXVK source directory (macOS)")
   message(STATUS "DXVK source directory: ${DXVK_SOURCE_DIR}")
   message(STATUS "DXVK d3d8 library:     ${DXVK_D3D8_LIB}")
+
+elseif(SAGE_DXVK_FROM_SOURCE)
+  # GeneralsX @build rpi5 11/10/2026 Linux aarch64 (Raspberry Pi 5): there is no prebuilt
+  # aarch64 DXVK native release, so build the generalsx-project DXVK fork with Meson.
+  # cmake/patches/dxvk/ adds V3DV support (optional robustness2, HUD without
+  # multiDrawIndirect, dummy descriptors without nullDescriptor) and fixes the
+  # fork's Linux build. Headers use the same include/native layout as macOS.
+  find_program(MESON_EXECUTABLE meson)
+  find_program(NINJA_EXECUTABLE ninja)
+  find_program(GIT_EXECUTABLE git)
+  if(NOT MESON_EXECUTABLE OR NOT NINJA_EXECUTABLE)
+    message(FATAL_ERROR "DXVK source build requires meson and ninja (apt install meson ninja-build)")
+  endif()
+
+  include(ExternalProject)
+
+  # Same pinned fork commit as the macOS build
+  set(DXVK_REMOTE_REF f66da559fd48cd55ddfebca38ed0f708c0f76a24)
+  # Keep the tarball's location so dxvk_SOURCE_DIR-based paths and the deploy
+  # scripts' _deps/dxvk-src/lib lookup keep working.
+  set(DXVK_SOURCE_DIR "${CMAKE_BINARY_DIR}/_deps/dxvk-src")
+  set(DXVK_BUILD_DIR  "${CMAKE_BINARY_DIR}/_deps/dxvk-build-native")
+  set(DXVK_D3D8_LIB   "${DXVK_BUILD_DIR}/src/d3d8/libdxvk_d3d8.so.0")
+  set(DXVK_D3D9_LIB   "${DXVK_BUILD_DIR}/src/d3d9/libdxvk_d3d9.so.0")
+  file(GLOB DXVK_PATCHES "${CMAKE_CURRENT_LIST_DIR}/patches/dxvk/*.patch")
+  list(SORT DXVK_PATCHES)
+  if(NOT DXVK_PATCHES)
+    message(FATAL_ERROR "No DXVK patches found in ${CMAKE_CURRENT_LIST_DIR}/patches/dxvk")
+  endif()
+
+  # DXVK's SDL3 WSI only needs SDL3 headers (it dlopens libSDL3.so.0 at runtime).
+  # Debian bookworm has no libsdl3-dev, so point Meson (which looks up "SDL3" by
+  # that exact pkg-config name) at the SDL3 sources that
+  # cmake/sdl3.cmake fetches during configure. Without SDL3, DXVK silently builds
+  # without the SDL3 WSI and the game cannot create a window.
+  set(DXVK_PKGCONFIG_DIR "${CMAKE_BINARY_DIR}/_deps/dxvk-pkgconfig")
+  file(WRITE "${DXVK_PKGCONFIG_DIR}/SDL3.pc"
+"Name: sdl3
+Description: SDL3 headers from the GeneralsX FetchContent build
+Version: 3.4.2
+Cflags: -I${CMAKE_BINARY_DIR}/_deps/sdl3-src/include
+Libs:
+")
+
+  message(STATUS "Building DXVK ${DXVK_VERSION} from source for ${CMAKE_SYSTEM_PROCESSOR} with Meson (${MESON_EXECUTABLE})")
+
+  ExternalProject_Add(dxvk_native_build
+    GIT_REPOSITORY    https://github.com/generalsx-project/dxvk.git
+    GIT_TAG           ${DXVK_REMOTE_REF}
+    GIT_SHALLOW       FALSE
+    GIT_SUBMODULES_RECURSE TRUE
+    SOURCE_DIR        ${DXVK_SOURCE_DIR}
+    BINARY_DIR        ${DXVK_BUILD_DIR}
+    PATCH_COMMAND     ${GIT_EXECUTABLE} -c user.name=build -c user.email=build@localhost am --3way ${DXVK_PATCHES}
+    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${DXVK_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}" ${MESON_EXECUTABLE} setup ${DXVK_BUILD_DIR} ${DXVK_SOURCE_DIR} -Ddxvk_native_wsi=sdl3 --buildtype=release --reconfigure
+    BUILD_COMMAND     ${MESON_EXECUTABLE} compile -C ${DXVK_BUILD_DIR} dxvk_d3d9 dxvk_d3d8
+    INSTALL_COMMAND   ""
+    UPDATE_DISCONNECTED TRUE
+  )
+
+  # Put the libraries where the prebuilt tarball had them, and next to the game
+  # binary's build directory, which is where LoadLibrary("libdxvk_d3d8.so") looks.
+  add_custom_command(
+    OUTPUT  "${CMAKE_BINARY_DIR}/libdxvk_d3d8.so.0"
+            "${CMAKE_BINARY_DIR}/libdxvk_d3d9.so.0"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${DXVK_SOURCE_DIR}/lib"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXVK_D3D9_LIB} ${DXVK_D3D8_LIB} "${DXVK_SOURCE_DIR}/lib"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libdxvk_d3d9.so.0 "${DXVK_SOURCE_DIR}/lib/libdxvk_d3d9.so"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libdxvk_d3d8.so.0 "${DXVK_SOURCE_DIR}/lib/libdxvk_d3d8.so"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXVK_D3D9_LIB} ${DXVK_D3D8_LIB} "${CMAKE_BINARY_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libdxvk_d3d9.so.0 "${CMAKE_BINARY_DIR}/libdxvk_d3d9.so"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libdxvk_d3d8.so.0 "${CMAKE_BINARY_DIR}/libdxvk_d3d8.so"
+    DEPENDS dxvk_native_build
+    COMMENT "Installing libdxvk_d3d8 + libdxvk_d3d9 to build directory"
+  )
+  add_custom_target(dxvk_d3d8_install ALL
+    DEPENDS "${CMAKE_BINARY_DIR}/libdxvk_d3d8.so.0"
+            "${CMAKE_BINARY_DIR}/libdxvk_d3d9.so.0"
+  )
+
+  set(DXVK_INCLUDE_DIR "${DXVK_SOURCE_DIR}/include/native" CACHE PATH "DXVK native headers")
+  set(dxvk_SOURCE_DIR "${DXVK_SOURCE_DIR}" CACHE PATH "DXVK source directory (source build)")
+  message(STATUS "DXVK source directory: ${DXVK_SOURCE_DIR}")
 
 else()
   # Linux: Fetch pre-built DXVK native binary for DirectX→Vulkan translation

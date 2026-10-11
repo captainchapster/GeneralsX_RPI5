@@ -23,6 +23,12 @@ else()
     set(IS_VS6_BUILD FALSE)
 endif()
 
+# GeneralsX @build rpi5 11/10/2026 char is unsigned by default on ARM Linux, but the engine
+# was written for x86/MSVC where it is signed. Keep x86 semantics (Apple arm64 is already signed).
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|arm.*)$")
+    add_compile_options(-fsigned-char)
+endif()
+
 # Make release builds have debug information too.
 if(MSVC)
     # Create PDB for Release as long as debug info was generated during compile.
