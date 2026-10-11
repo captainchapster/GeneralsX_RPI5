@@ -3934,6 +3934,13 @@ void GameLogic::update()
 	#endif
 	}
 
+	// GeneralsX @bugfix rpi5 11/10/2026 Hold the shell map at its first frame until the intro is over.
+	// It loads in the pause between the EA logo and the sizzle movie (loading it later showed the main
+	// menu twice), but it then ran under the sizzle movie: its scripts and units were heard during the
+	// movie, and the menu opened on a scene already part way through.
+	if (isInShellGame() && TheGameClient && TheGameClient->isIntroPlaying())
+		return;
+
 	// send the current time to the GameClient
 	UnsignedInt now = getFrame();
 	TheGameClient->setFrame(now);

@@ -164,7 +164,7 @@ AudioManager::AudioManager() :
 	m_listenerPosition.zero();
 	m_musicTracks.clear();
 	m_musicVolume = 0.0f;
-	m_musicHeld = FALSE;
+	m_gameAudioHeld = FALSE;
 	m_sound3DVolume = 0.0f;
 	m_soundVolume   = 0.0f;
 	m_speechVolume  = 0.0f;
@@ -247,9 +247,9 @@ void AudioManager::init()
 	m_scriptSound3DVolume = 1.0f;
 	m_scriptSpeechVolume = 1.0f;
 
-	m_musicVolume = m_musicHeld ? 0.0f : m_systemMusicVolume;
-	m_soundVolume = m_systemSoundVolume;
-	m_sound3DVolume = m_systemSound3DVolume;
+	m_musicVolume = m_gameAudioHeld ? 0.0f : m_systemMusicVolume;
+	m_soundVolume = m_gameAudioHeld ? 0.0f : m_systemSoundVolume;
+	m_sound3DVolume = m_gameAudioHeld ? 0.0f : m_systemSound3DVolume;
 	m_speechVolume = m_systemSpeechVolume;
 }
 
@@ -272,9 +272,9 @@ void AudioManager::reset()
 	m_scriptSpeechVolume = 1.0f;
 
 	// restore the final values to the
-	m_musicVolume = m_musicHeld ? 0.0f : m_systemMusicVolume;
-	m_soundVolume = m_systemSoundVolume;
-	m_sound3DVolume = m_systemSound3DVolume;
+	m_musicVolume = m_gameAudioHeld ? 0.0f : m_systemMusicVolume;
+	m_soundVolume = m_gameAudioHeld ? 0.0f : m_systemSoundVolume;
+	m_sound3DVolume = m_gameAudioHeld ? 0.0f : m_systemSound3DVolume;
 	m_speechVolume = m_systemSpeechVolume;
 
 	m_disallowSpeech = FALSE;
@@ -709,7 +709,7 @@ void AudioManager::setVolume( Real volume, AudioAffect whichToAffect )
 			m_scriptMusicVolume = volume;
 		}
 
-		const Real newVolume = m_musicHeld ? 0.0f : m_scriptMusicVolume * m_systemMusicVolume;
+		const Real newVolume = m_gameAudioHeld ? 0.0f : m_scriptMusicVolume * m_systemMusicVolume;
 		if (m_musicVolume != newVolume)
 		{
 			m_musicVolume = newVolume;
@@ -724,7 +724,7 @@ void AudioManager::setVolume( Real volume, AudioAffect whichToAffect )
 			m_scriptSoundVolume = volume;
 		}
 
-		const Real newVolume = m_scriptSoundVolume * m_systemSoundVolume;
+		const Real newVolume = m_gameAudioHeld ? 0.0f : m_scriptSoundVolume * m_systemSoundVolume;
 		if (m_soundVolume != newVolume)
 		{
 			m_soundVolume = newVolume;
@@ -739,7 +739,7 @@ void AudioManager::setVolume( Real volume, AudioAffect whichToAffect )
 			m_scriptSound3DVolume = volume;
 		}
 
-		const Real newVolume = m_scriptSound3DVolume * m_systemSound3DVolume;
+		const Real newVolume = m_gameAudioHeld ? 0.0f : m_scriptSound3DVolume * m_systemSound3DVolume;
 		if (m_sound3DVolume != newVolume)
 		{
 			m_sound3DVolume = newVolume;
@@ -765,20 +765,24 @@ void AudioManager::setVolume( Real volume, AudioAffect whichToAffect )
 
 //-------------------------------------------------------------------------------------------------
 // GeneralsX @bugfix rpi5 11/10/2026 The shell map loads in the pause between the EA logo and the
-// sizzle movie, and its scripts start the menu music while the sizzle movie plays the same track,
-// so the music was heard twice. Hold the music at zero volume until the intro is over; it keeps
-// playing underneath and carries on from there. Loading the shell map during the intro is what lets
-// the main menu appear only once.
-void AudioManager::setMusicHeld( Bool held )
+// sizzle movie. GameLogic holds it at its first frame until the intro is over, but sounds the map
+// starts while loading, such as object ambients, were heard under the movie. Keep music and sound
+// effects at zero volume until the intro is over. Speech is left alone: it is not used by the shell
+// map, and movie audio may use it.
+void AudioManager::setGameAudioHeld( Bool held )
 {
-	if (m_musicHeld == held)
+	if (m_gameAudioHeld == held)
 		return;
 
-	m_musicHeld = held;
-	const Real newVolume = m_musicHeld ? 0.0f : m_scriptMusicVolume * m_systemMusicVolume;
-	if (m_musicVolume != newVolume)
+	m_gameAudioHeld = held;
+	const Real musicVolume = held ? 0.0f : m_scriptMusicVolume * m_systemMusicVolume;
+	const Real soundVolume = held ? 0.0f : m_scriptSoundVolume * m_systemSoundVolume;
+	const Real sound3DVolume = held ? 0.0f : m_scriptSound3DVolume * m_systemSound3DVolume;
+	if (m_musicVolume != musicVolume || m_soundVolume != soundVolume || m_sound3DVolume != sound3DVolume)
 	{
-		m_musicVolume = newVolume;
+		m_musicVolume = musicVolume;
+		m_soundVolume = soundVolume;
+		m_sound3DVolume = sound3DVolume;
 		m_volumeHasChanged = true;
 	}
 }
