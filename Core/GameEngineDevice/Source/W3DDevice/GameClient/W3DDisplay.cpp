@@ -590,8 +590,10 @@ static void SDL3_CenterWindowOnCurrentDisplay(SDL_Window* window, Int width, Int
 // ratio. Switching a 3440x1440 ultrawide to 1024x768 made the monitor stretch the 4:3 picture across
 // the whole panel. A mode with the desktop's shape (2560x1080 on a 21:9 panel, say) keeps the cost low
 // and lets the pillarbox in DX8Wrapper center the game image with black bars, as desktop fullscreen
-// does. Prefers the smallest such mode at least as tall as the render size, below the desktop size.
-// Falls back to the closest mode to the render size when the monitor offers no such mode.
+// does. Prefers the smallest such mode at least as tall as the render size, below the monitor's largest
+// (native) mode. The desktop may already be in such a mode: run-pi5-zh.sh switches to it before launch
+// so the monitor has re-synced before the intro starts. Falls back to the closest mode to the render
+// size when the monitor offers no such mode.
 static bool SDL3_PickExclusiveFullscreenMode(SDL_DisplayID displayId, Int renderWidth, Int renderHeight,
 	SDL_DisplayMode& outMode)
 {
@@ -604,9 +606,13 @@ static bool SDL3_PickExclusiveFullscreenMode(SDL_DisplayID displayId, Int render
 			int count = 0;
 			SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(displayId, &count);
 			const SDL_DisplayMode* best = nullptr;
+			int nativeWidth = 0;
+			for (int i = 0; modes && i < count; ++i) {
+				if (modes[i]->w > nativeWidth) nativeWidth = modes[i]->w;
+			}
 			for (int i = 0; modes && i < count; ++i) {
 				const SDL_DisplayMode* m = modes[i];
-				if (m->w <= 0 || m->h <= 0 || m->w >= desktop->w) continue;
+				if (m->w <= 0 || m->h <= 0 || m->w >= nativeWidth) continue;
 				const float aspect = (float)m->w / (float)m->h;
 				if (fabsf(aspect - desktopAspect) > desktopAspect * tolerance) continue;
 				if (!best) { best = m; continue; }
@@ -630,7 +636,7 @@ static bool SDL3_PickExclusiveFullscreenMode(SDL_DisplayID displayId, Int render
 				return true;
 			}
 			SDL_free(modes);
-			fprintf(stderr, "INFO: no %dx%d-shaped display mode below the desktop size; the monitor will "
+			fprintf(stderr, "INFO: no %dx%d-shaped display mode below the native size; the monitor will "
 				"stretch %dx%d\n", desktop->w, desktop->h, renderWidth, renderHeight);
 		}
 	}

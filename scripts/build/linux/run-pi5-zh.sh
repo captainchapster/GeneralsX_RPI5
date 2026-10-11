@@ -37,6 +37,11 @@ export GENERALSX_EXCLUSIVE_FULLSCREEN="${GENERALSX_EXCLUSIVE_FULLSCREEN:-1}"
 # ratio near the game's height (the game then adds black bars). Ultrawide monitors often list only
 # their native mode plus 4:3 ones, which they stretch, so add a reduced-blanking mode with the
 # desktop's shape and the game's height to X11. It is gone after a reboot, so add it on every launch.
+# Switch to it before the game starts and back afterwards: a monitor takes a second or two to re-sync
+# after a mode change, which hid the EA logo movie when the game switched modes itself.
+ASPECT_OUTPUT=""
+ASPECT_RESTORE_MODE=""
+ASPECT_RESTORE_RATE=""
 add_aspect_mode() {
   command -v xrandr >/dev/null 2>&1 && command -v cvt >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]] || return 0
   local options="${XDG_DATA_HOME:-${HOME}/.local/share}/GeneralsX/GeneralsZH/Options.ini"
@@ -62,6 +67,20 @@ add_aspect_mode() {
     xrandr --addmode "${output}" "${name}" 2>/dev/null || return 0
     echo "== Added display mode ${name} on ${output} for the ${dw}x${dh} desktop"
   fi
+  local current_mode current_rate
+  read -r current_mode current_rate < <(xrandr --current | awk '/^ +[0-9]/{for(i=2;i<=NF;i++) if($i ~ /\*/){r=$i; gsub(/[*+]/,"",r); print $1, r; exit}}')
+  [[ -n "${current_mode:-}" ]] || return 0
+  if xrandr --output "${output}" --mode "${name}"; then
+    ASPECT_OUTPUT="${output}"
+    ASPECT_RESTORE_MODE="${current_mode}"
+    ASPECT_RESTORE_RATE="${current_rate}"
+    echo "== Switched ${output} to ${name} for the game"
+  fi
+}
+restore_desktop_mode() {
+  [[ -n "${ASPECT_OUTPUT}" ]] || return 0
+  xrandr --output "${ASPECT_OUTPUT}" --mode "${ASPECT_RESTORE_MODE}" ${ASPECT_RESTORE_RATE:+--rate "${ASPECT_RESTORE_RATE}"} || true
+  ASPECT_OUTPUT=""
 }
 if [[ "${GENERALSX_EXCLUSIVE_FULLSCREEN}" == "1" && " $* " != *" -win "* ]]; then
   add_aspect_mode || true
@@ -72,4 +91,11 @@ echo "== DXVK_FILTER_DEVICE_NAME=${DXVK_FILTER_DEVICE_NAME}"
 ls "${GAME_DIR}"/*.big >/dev/null 2>&1 || echo "WARNING: no .big files in ${GAME_DIR}"
 ls "${HOME}/GeneralsX/Generals"/*.big >/dev/null 2>&1 || echo "WARNING: no base Generals .big files in ~/GeneralsX/Generals"
 
-exec "${GAME_DIR}/run.sh" "$@"
+if [[ -z "${ASPECT_OUTPUT}" ]]; then
+  exec "${GAME_DIR}/run.sh" "$@"
+fi
+# Restore the desktop mode however the game exits.
+trap restore_desktop_mode EXIT INT TERM
+status=0
+"${GAME_DIR}/run.sh" "$@" || status=$?
+exit "${status}"
