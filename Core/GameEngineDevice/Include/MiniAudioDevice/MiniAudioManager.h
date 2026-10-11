@@ -168,6 +168,10 @@ protected:
 
 	// Looping functions
 	Bool startNextLoop(PlayingAudio *looping);
+	// GeneralsX @bugfix rpi5 11/10/2026 Restart a finished looping sound effect; false when it is done.
+	Bool continueLoopingSound(PlayingAudio *playing);
+	// GeneralsX @refactor rpi5 11/10/2026 FFmpeg decode of a whole file into a new ma_audio_buffer.
+	ma_audio_buffer *decodeFileToBuffer(const AsciiString &fileToPlay);
 
 	void playStream(AudioEventRTS *event, ma_sound *sound);
 
