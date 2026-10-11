@@ -63,8 +63,26 @@ add_aspect_mode() {
     echo "== Added display mode ${name} on ${output} for the ${dw}x${dh} desktop"
   fi
 }
+# Xfce's desktop moves icons that do not fit while the game has the display in a smaller mode, and
+# keeps the new layout. Turn its icons off while the game runs and back on afterwards; it then lays
+# them out again from the layout saved for the desktop resolution.
+ICON_STYLE_RESTORE=""
+hide_desktop_icons() {
+  command -v xfconf-query >/dev/null 2>&1 && pgrep -x xfdesktop >/dev/null 2>&1 || return 0
+  local style
+  style="$(xfconf-query -c xfce4-desktop -p /desktop-icons/style 2>/dev/null)" || return 0
+  [[ -n "${style}" && "${style}" != "0" ]] || return 0
+  xfconf-query -c xfce4-desktop -p /desktop-icons/style -s 0 && ICON_STYLE_RESTORE="${style}"
+}
+restore_desktop_icons() {
+  [[ -n "${ICON_STYLE_RESTORE}" ]] || return 0
+  xfconf-query -c xfce4-desktop -p /desktop-icons/style -s "${ICON_STYLE_RESTORE}" || true
+  ICON_STYLE_RESTORE=""
+}
+
 if [[ "${GENERALSX_EXCLUSIVE_FULLSCREEN}" == "1" && " $* " != *" -win "* ]]; then
   add_aspect_mode || true
+  hide_desktop_icons || true
 fi
 
 echo "== VK_ICD_FILENAMES=${VK_ICD_FILENAMES}"
@@ -72,4 +90,11 @@ echo "== DXVK_FILTER_DEVICE_NAME=${DXVK_FILTER_DEVICE_NAME}"
 ls "${GAME_DIR}"/*.big >/dev/null 2>&1 || echo "WARNING: no .big files in ${GAME_DIR}"
 ls "${HOME}/GeneralsX/Generals"/*.big >/dev/null 2>&1 || echo "WARNING: no base Generals .big files in ~/GeneralsX/Generals"
 
-exec "${GAME_DIR}/run.sh" "$@"
+if [[ -z "${ICON_STYLE_RESTORE}" ]]; then
+  exec "${GAME_DIR}/run.sh" "$@"
+fi
+# Bring the desktop icons back however the game exits.
+trap restore_desktop_icons EXIT
+status=0
+"${GAME_DIR}/run.sh" "$@" || status=$?
+exit "${status}"

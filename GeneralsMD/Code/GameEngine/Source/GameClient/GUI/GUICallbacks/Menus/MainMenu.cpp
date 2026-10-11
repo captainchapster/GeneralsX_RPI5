@@ -985,6 +985,10 @@ void MainMenuUpdate( WindowLayout *layout, void *userData )
 		if(initialGadgetDelay == 1)
 		{
 			TheTransitionHandler->setGroup("MainMenuDefaultMenuLogoFade");
+			// GeneralsX @bugfix rpi5 11/10/2026 The menu is now on screen, so the first mouse move or key
+			// press must not bring it in again. After the intro, GameClient re-runs MainMenuInit() while
+			// the first-run "show on input" state was still pending, and the menu buttons flew in twice.
+			notShown = FALSE;
 			TheWindowManager->winSetFocus( parentMainMenu );
 			initialGadgetDelay = 2;
 			justEntered = FALSE;
@@ -1107,6 +1111,11 @@ WindowMsgHandledType MainMenuInput( GameWindow *window, UnsignedInt msg,
 																		WindowMsgData mData1, WindowMsgData mData2 )
 {
 	if(!notShown)
+		return MSG_IGNORED;
+
+	// GeneralsX @bugfix rpi5 11/10/2026 Ignore input while the intro movies play: the key that skips a
+	// movie, or a mouse move, otherwise brought the hidden menu in behind the movie.
+	if (TheGameClient && TheGameClient->isIntroPlaying())
 		return MSG_IGNORED;
 
 	switch( msg )
