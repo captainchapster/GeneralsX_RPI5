@@ -422,6 +422,9 @@ void GameClient::init()
 	TheDisplayStringManager->postProcessLoad();
 
 	m_intro = NEW Intro;
+	// GeneralsX @bugfix rpi5 11/10/2026 Hold the music until the intro is over (see AudioManager::setMusicHeld).
+	if (TheAudio && m_intro->isPlaying())
+		TheAudio->setMusicHeld(TRUE);
 
 #ifdef PERF_TIMERS
 	TheGraphDraw = new GraphDraw;
@@ -514,6 +517,8 @@ void GameClient::update()
 		{
 			delete m_intro;
 			m_intro = nullptr;
+			if (TheAudio)
+				TheAudio->setMusicHeld(FALSE);
 
 			TheShell->showShellMap(TRUE);
 			TheShell->showShell();
@@ -723,12 +728,6 @@ void GameClient::updateHeadless()
 	// during GameLogic and only cleaned up during rendering. update() lets particles finish
 	// their lifecycle naturally instead of abruptly removing them with reset().
 	TheParticleSystemManager->update();
-}
-
-// GeneralsX @bugfix rpi5 11/10/2026 Lets GameLogic hold the shell map until the intro has finished.
-Bool GameClient::isIntroPlaying() const
-{
-	return m_intro != nullptr && m_intro->isPlaying();
 }
 
 Bool GameClient::skipCurrentIntroStage()

@@ -38,30 +38,12 @@ export GENERALSX_EXCLUSIVE_FULLSCREEN="${GENERALSX_EXCLUSIVE_FULLSCREEN:-1}"
 # their native mode plus 4:3 ones, which they stretch, so add a reduced-blanking mode with the
 # desktop's shape and the game's height to X11. It is gone after a reboot, so add it on every launch.
 # Switch to it before the game starts and back afterwards: a monitor takes a second or two to re-sync
-# after a mode change, which hid the EA logo movie when the game switched modes itself.
+# after a mode change, which hid the EA logo movie when the game switched modes itself. Keep the X
+# screen at its desktop size, as SDL does when it switches modes; shrinking it made Xfce rearrange the
+# desktop icons.
 ASPECT_OUTPUT=""
 ASPECT_RESTORE_MODE=""
 ASPECT_RESTORE_RATE=""
-ICON_LAYOUT_BACKUP=""
-# Xfce's desktop moves icons that no longer fit when the screen shrinks and saves the new layout, so
-# keep a copy of its icon layout files and put them back once the desktop mode is restored.
-XFDESKTOP_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/xfce4/desktop"
-backup_icon_layout() {
-  compgen -G "${XFDESKTOP_DIR}/icons.screen*.rc" >/dev/null || return 0
-  ICON_LAYOUT_BACKUP="$(mktemp -d)"
-  cp -p "${XFDESKTOP_DIR}"/icons.screen*.rc "${ICON_LAYOUT_BACKUP}/"
-}
-restore_icon_layout() {
-  [[ -n "${ICON_LAYOUT_BACKUP}" ]] || return 0
-  # Let xfdesktop finish reacting to the mode change before the layout goes back.
-  sleep 2
-  cp -p "${ICON_LAYOUT_BACKUP}"/icons.screen*.rc "${XFDESKTOP_DIR}/"
-  rm -rf "${ICON_LAYOUT_BACKUP}"
-  ICON_LAYOUT_BACKUP=""
-  if pgrep -x xfdesktop >/dev/null 2>&1; then
-    xfdesktop --reload >/dev/null 2>&1 || true
-  fi
-}
 add_aspect_mode() {
   command -v xrandr >/dev/null 2>&1 && command -v cvt >/dev/null 2>&1 && [[ -n "${DISPLAY:-}" ]] || return 0
   local options="${XDG_DATA_HOME:-${HOME}/.local/share}/GeneralsX/GeneralsZH/Options.ini"
@@ -90,22 +72,17 @@ add_aspect_mode() {
   local current_mode current_rate
   read -r current_mode current_rate < <(xrandr --current | awk '/^ +[0-9]/{for(i=2;i<=NF;i++) if($i ~ /\*/){r=$i; gsub(/[*+]/,"",r); print $1, r; exit}}')
   [[ -n "${current_mode:-}" ]] || return 0
-  backup_icon_layout
-  if xrandr --output "${output}" --mode "${name}"; then
+  if xrandr --output "${output}" --mode "${name}" --fb "${desktop}"; then
     ASPECT_OUTPUT="${output}"
     ASPECT_RESTORE_MODE="${current_mode}"
     ASPECT_RESTORE_RATE="${current_rate}"
     echo "== Switched ${output} to ${name} for the game"
-  else
-    rm -rf "${ICON_LAYOUT_BACKUP}"
-    ICON_LAYOUT_BACKUP=""
   fi
 }
 restore_desktop_mode() {
   [[ -n "${ASPECT_OUTPUT}" ]] || return 0
   xrandr --output "${ASPECT_OUTPUT}" --mode "${ASPECT_RESTORE_MODE}" ${ASPECT_RESTORE_RATE:+--rate "${ASPECT_RESTORE_RATE}"} || true
   ASPECT_OUTPUT=""
-  restore_icon_layout
 }
 if [[ "${GENERALSX_EXCLUSIVE_FULLSCREEN}" == "1" && " $* " != *" -win "* ]]; then
   add_aspect_mode || true

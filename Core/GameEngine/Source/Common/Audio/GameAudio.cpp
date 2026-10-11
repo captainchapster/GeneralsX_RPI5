@@ -164,6 +164,7 @@ AudioManager::AudioManager() :
 	m_listenerPosition.zero();
 	m_musicTracks.clear();
 	m_musicVolume = 0.0f;
+	m_musicHeld = FALSE;
 	m_sound3DVolume = 0.0f;
 	m_soundVolume   = 0.0f;
 	m_speechVolume  = 0.0f;
@@ -246,7 +247,7 @@ void AudioManager::init()
 	m_scriptSound3DVolume = 1.0f;
 	m_scriptSpeechVolume = 1.0f;
 
-	m_musicVolume = m_systemMusicVolume;
+	m_musicVolume = m_musicHeld ? 0.0f : m_systemMusicVolume;
 	m_soundVolume = m_systemSoundVolume;
 	m_sound3DVolume = m_systemSound3DVolume;
 	m_speechVolume = m_systemSpeechVolume;
@@ -271,7 +272,7 @@ void AudioManager::reset()
 	m_scriptSpeechVolume = 1.0f;
 
 	// restore the final values to the
-	m_musicVolume = m_systemMusicVolume;
+	m_musicVolume = m_musicHeld ? 0.0f : m_systemMusicVolume;
 	m_soundVolume = m_systemSoundVolume;
 	m_sound3DVolume = m_systemSound3DVolume;
 	m_speechVolume = m_systemSpeechVolume;
@@ -708,7 +709,7 @@ void AudioManager::setVolume( Real volume, AudioAffect whichToAffect )
 			m_scriptMusicVolume = volume;
 		}
 
-		const Real newVolume = m_scriptMusicVolume * m_systemMusicVolume;
+		const Real newVolume = m_musicHeld ? 0.0f : m_scriptMusicVolume * m_systemMusicVolume;
 		if (m_musicVolume != newVolume)
 		{
 			m_musicVolume = newVolume;
@@ -759,6 +760,26 @@ void AudioManager::setVolume( Real volume, AudioAffect whichToAffect )
 			m_speechVolume = newVolume;
 			m_volumeHasChanged = true;
 		}
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 The shell map loads in the pause between the EA logo and the
+// sizzle movie, and its scripts start the menu music while the sizzle movie plays the same track,
+// so the music was heard twice. Hold the music at zero volume until the intro is over; it keeps
+// playing underneath and carries on from there. Loading the shell map during the intro is what lets
+// the main menu appear only once.
+void AudioManager::setMusicHeld( Bool held )
+{
+	if (m_musicHeld == held)
+		return;
+
+	m_musicHeld = held;
+	const Real newVolume = m_musicHeld ? 0.0f : m_scriptMusicVolume * m_systemMusicVolume;
+	if (m_musicVolume != newVolume)
+	{
+		m_musicVolume = newVolume;
+		m_volumeHasChanged = true;
 	}
 }
 
