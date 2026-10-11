@@ -83,6 +83,15 @@ void NGMP_OnlineServicesManager::beginBrowserLogin() {
         m_gamecode = "ILOVECODE";
         fprintf(stderr, "[NGMP] Development mode detected: using bypass gamecode ILOVECODE\n");
         fflush(stderr);
+
+        // GeneralsX @bugfix captainchapster 12/10/2026 Give the development login a Cancel button too; without
+        // it the main menu stayed locked while the poll waited for a server that may not be running.
+        ClearGSMessageBoxes();
+        GSMessageBoxCancel(UnicodeString(L"Generals Online Login"),
+                           UnicodeString(L"Connecting to the Generals Online development server..."),
+                           []() {
+                               NGMP_OnlineServicesManager::getInstance().cancelBrowserLogin();
+                           });
     } else {
         std::string serverCode = RequestLoginCodeFromServer();
         if (serverCode.empty()) {
@@ -123,6 +132,10 @@ void NGMP_OnlineServicesManager::beginBrowserLogin() {
 
     m_pollThread = std::thread([this]() {
         const int64_t pollIntervalMs = 1000;
+        // GeneralsX @bugfix captainchapster 12/10/2026 Give up when the server cannot be reached at all,
+        // instead of polling forever behind the login dialog.
+        const int maxConsecutiveConnectFailures = 10;
+        int consecutiveConnectFailures = 0;
 
         fprintf(stderr, "[NGMP] Poll thread started for gamecode=%s\n", m_gamecode.c_str());
         fflush(stderr);
@@ -174,8 +187,22 @@ void NGMP_OnlineServicesManager::beginBrowserLogin() {
             if (res != CURLE_OK) {
                 fprintf(stderr, "[NGMP] Poll HTTP error: %s\n", curl_easy_strerror(res));
                 fflush(stderr);
+                if (++consecutiveConnectFailures >= maxConsecutiveConnectFailures) {
+                    fprintf(stderr, "[NGMP] Login server unreachable after %d attempts, giving up\n", consecutiveConnectFailures);
+                    fflush(stderr);
+
+                    m_waitingBrowserLogin = false;
+                    m_pollThreadRunning   = false;
+
+                    NGMPEvent ev;
+                    ev.type    = NGMPEvent::EVENT_AUTH_FAILURE;
+                    ev.payload = "Login server unreachable";
+                    postEvent(ev);
+                    return;
+                }
                 continue;
             }
+            consecutiveConnectFailures = 0;
 
             if (NGMP::IsDevelopment()) {
                 fprintf(stderr, "[NGMP] CheckLogin response (%ld): %s\n", httpCode, response.text.c_str());
