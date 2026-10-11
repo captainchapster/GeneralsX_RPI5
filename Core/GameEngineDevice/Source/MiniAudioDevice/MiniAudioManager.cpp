@@ -1087,7 +1087,12 @@ AudioEventRTS *MiniAudioManager::findLowestPrioritySound(AudioEventRTS *event)
 	AudioEventRTS *lowestPriorityEvent = NULL;
 	AudioPriority lowestPriority = AP_LOWEST;
 
+	// GeneralsX @bugfix rpi5 11/10/2026 Only compete with sounds of the same channel type, as
+	// Miles and OpenAL do with their separate 2D/3D lists. m_playingSounds also holds music and
+	// speech streams, which were being killed to make room for sound effects.
+	const PlayingAudioType channelType = event->isPositionalAudio() ? PAT_3DSample : PAT_Sample;
 	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		if ((*it)->m_type != channelType) continue;
 		AudioEventRTS *itEvent = (*it)->m_audioEventRTS.Peek();
 		if (!itEvent) continue;
 		const AudioEventInfo *itInfo = itEvent->getAudioEventInfo();
@@ -1110,8 +1115,11 @@ Bool MiniAudioManager::isPlayingLowerPriority(AudioEventRTS *event) const
 	AudioPriority priority = event->getAudioEventInfo()->m_priority;
 	if (priority == AP_LOWEST) return false;
 
+	// GeneralsX @bugfix rpi5 11/10/2026 Never pick a music or speech stream as the handle to
+	// kill; see findLowestPrioritySound().
+	const PlayingAudioType channelType = event->isPositionalAudio() ? PAT_3DSample : PAT_Sample;
 	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
-		if (!(*it)->m_audioEventRTS) continue;
+		if ((*it)->m_type != channelType || !(*it)->m_audioEventRTS) continue;
 		const AudioEventInfo *info = (*it)->m_audioEventRTS->getAudioEventInfo();
 		if (info && info->m_priority < priority) {
 			event->setHandleToKill((*it)->m_audioEventRTS->getPlayingHandle());
