@@ -586,6 +586,57 @@ static void SDL3_CenterWindowOnCurrentDisplay(SDL_Window* window, Int width, Int
 	}
 }
 
+// GeneralsX @bugfix rpi5 11/10/2026 Pick an exclusive fullscreen mode with the monitor's own aspect
+// ratio. Switching a 3440x1440 ultrawide to 1024x768 made the monitor stretch the 4:3 picture across
+// the whole panel. A mode with the desktop's shape (2560x1080 on a 21:9 panel, say) keeps the cost low
+// and lets the pillarbox in DX8Wrapper center the game image with black bars, as desktop fullscreen
+// does. Prefers the smallest such mode at least as tall as the render size, below the desktop size.
+// Falls back to the closest mode to the render size when the monitor offers no such mode.
+static bool SDL3_PickExclusiveFullscreenMode(SDL_DisplayID displayId, Int renderWidth, Int renderHeight,
+	SDL_DisplayMode& outMode)
+{
+	const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(displayId);
+	if (desktop && desktop->w > 0 && desktop->h > 0 && renderWidth > 0 && renderHeight > 0) {
+		const float desktopAspect = (float)desktop->w / (float)desktop->h;
+		const float renderAspect = (float)renderWidth / (float)renderHeight;
+		const float tolerance = 0.03f;
+		if (fabsf(renderAspect - desktopAspect) > desktopAspect * tolerance) {
+			int count = 0;
+			SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(displayId, &count);
+			const SDL_DisplayMode* best = nullptr;
+			for (int i = 0; modes && i < count; ++i) {
+				const SDL_DisplayMode* m = modes[i];
+				if (m->w <= 0 || m->h <= 0 || m->w >= desktop->w) continue;
+				const float aspect = (float)m->w / (float)m->h;
+				if (fabsf(aspect - desktopAspect) > desktopAspect * tolerance) continue;
+				if (!best) { best = m; continue; }
+				const bool bestTallEnough = best->h >= renderHeight;
+				const bool tallEnough = m->h >= renderHeight;
+				if (tallEnough != bestTallEnough) {
+					if (tallEnough) best = m;
+				}
+				else if (m->h != best->h) {
+					// Among tall enough modes take the smallest, otherwise the tallest.
+					if (tallEnough ? (m->h < best->h) : (m->h > best->h)) best = m;
+				}
+				else if (fabsf(m->refresh_rate - desktop->refresh_rate) <
+					fabsf(best->refresh_rate - desktop->refresh_rate)) {
+					best = m;
+				}
+			}
+			if (best) {
+				outMode = *best;
+				SDL_free(modes);
+				return true;
+			}
+			SDL_free(modes);
+			fprintf(stderr, "INFO: no %dx%d-shaped display mode below the desktop size; the monitor will "
+				"stretch %dx%d\n", desktop->w, desktop->h, renderWidth, renderHeight);
+		}
+	}
+	return SDL_GetClosestFullscreenDisplayMode(displayId, renderWidth, renderHeight, 0.0f, false, &outMode);
+}
+
 // GeneralsX @bugfix GitHub Copilot 27/04/2026 Apply SDL3 window sizing/fullscreen only after the final render resolution is known.
 static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, Int renderHeight)
 {
@@ -608,7 +659,7 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 		const bool wantExclusive = exclusiveEnv && exclusiveEnv[0] == '1';
 		SDL_DisplayMode exclusiveMode{};
 		if (wantExclusive && displayId != 0 &&
-			SDL_GetClosestFullscreenDisplayMode(displayId, renderWidth, renderHeight, 0.0f, false, &exclusiveMode)) {
+			SDL3_PickExclusiveFullscreenMode(displayId, renderWidth, renderHeight, exclusiveMode)) {
 			fprintf(stderr, "INFO: Exclusive fullscreen %dx%d@%.2f for render size %dx%d\n",
 				exclusiveMode.w, exclusiveMode.h, exclusiveMode.refresh_rate, renderWidth, renderHeight);
 			if (!SDL_SetWindowFullscreenMode(TheSDL3Window, &exclusiveMode)) {
