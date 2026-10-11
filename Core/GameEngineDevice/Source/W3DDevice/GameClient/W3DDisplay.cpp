@@ -599,7 +599,27 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 
 		SDL_DisplayID displayId = SDL_GetDisplayForWindow(TheSDL3Window);
 		const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(displayId);
-		if (mode) {
+		// GeneralsX @feature rpi5 11/10/2026 Optional exclusive fullscreen. Desktop fullscreen keeps the
+		// display at its native size, so DXVK scales every frame up to it: 3440x1440 is over six times
+		// the pixels of 1024x768, which cost a Raspberry Pi 5 about half its frame rate. With
+		// GENERALSX_EXCLUSIVE_FULLSCREEN=1 the display switches to the closest mode to the render
+		// resolution instead (SDL restores the desktop mode on exit), and the monitor does the scaling.
+		const char* exclusiveEnv = getenv("GENERALSX_EXCLUSIVE_FULLSCREEN");
+		const bool wantExclusive = exclusiveEnv && exclusiveEnv[0] == '1';
+		SDL_DisplayMode exclusiveMode{};
+		if (wantExclusive && displayId != 0 &&
+			SDL_GetClosestFullscreenDisplayMode(displayId, renderWidth, renderHeight, 0.0f, false, &exclusiveMode)) {
+			fprintf(stderr, "INFO: Exclusive fullscreen %dx%d@%.2f for render size %dx%d\n",
+				exclusiveMode.w, exclusiveMode.h, exclusiveMode.refresh_rate, renderWidth, renderHeight);
+			if (!SDL_SetWindowFullscreenMode(TheSDL3Window, &exclusiveMode)) {
+				fprintf(stderr, "WARNING: SDL_SetWindowFullscreenMode(exclusive) failed: %s\n", SDL_GetError());
+			}
+		}
+		else if (mode) {
+			if (wantExclusive) {
+				fprintf(stderr, "WARNING: no display mode close to %dx%d, using desktop fullscreen: %s\n",
+					renderWidth, renderHeight, SDL_GetError());
+			}
 			// GeneralsX @bugfix MrMeeseeks 02/07/2026 Pass nullptr to request Desktop Fullscreen (Spaces) instead of Exclusive mode.
 			if (!SDL_SetWindowFullscreenMode(TheSDL3Window, nullptr)) {
 				fprintf(stderr, "WARNING: SDL_SetWindowFullscreenMode(nullptr) failed: %s\n", SDL_GetError());
