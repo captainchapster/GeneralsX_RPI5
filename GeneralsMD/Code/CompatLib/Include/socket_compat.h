@@ -214,50 +214,10 @@ inline void OutputDebugString(const char* lpOutputString) {
 }
 #endif
 
-// strlcpy weak symbol (FTP.cpp uses for safe string copy)
-// Declared weak to avoid conflicts with BSD libc or Dependencies/Utility version
-extern "C" __attribute__((weak))
-size_t strlcpy(char *dst, const char *src, size_t dsize) {
-    const char *osrc = src;
-    size_t nleft = dsize;
-    if (nleft != 0) {
-        while (--nleft != 0) {
-            if ((*dst++ = *src++) == '\0') break;
-        }
-    }
-    if (nleft == 0) {
-        if (dsize != 0) *dst = '\0';
-        while (*src++) ;
-    }
-    return(src - osrc - 1);
-}
-
-// GeneralsX @TheSuperHackers @build BenderAI 11/02/2026 strlcat weak symbol (Download.cpp, FTP.cpp)
-extern "C" __attribute__((weak))
-size_t strlcat(char *dst, const char *src, size_t dsize) {
-   const char *odst = dst;
-    const char *osrc = src;
-    size_t n = dsize;
-    size_t dlen;
-
-    // Find end of dst and adjust n
-    while (n-- != 0 && *dst != '\0')
-        dst++;
-    dlen = dst - odst;
-    n = dsize - dlen;
-
-    if (n-- == 0)
-        return(dlen + strlen(src));
-    while (*src != '\0') {
-        if (n != 0) {
-            *dst++ = *src;
-            n--;
-        }
-        src++;
-    }
-    *dst = '\0';
-
-    return(dlen + (src - osrc)); // Total length that would have been created
-}
+// GeneralsX @build rpi5 11/10/2026 strlcpy/strlcat (FTP.cpp, Download.cpp) come from libc
+// where it has them (glibc 2.38+, macOS) and from Utility/stringex.h otherwise (glibc 2.36 on
+// Debian 12 / Raspberry Pi OS). The weak extern "C" copies that used to live here conflicted
+// with stringex.h's fallback declarations on libcs without them.
+#include <Utility/stringex.h>
 
 #endif // !_WIN32

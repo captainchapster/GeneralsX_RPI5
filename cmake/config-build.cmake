@@ -94,8 +94,21 @@ if(UNIX)
     target_compile_definitions(core_config INTERFACE _UNIX)
     # Ubuntu 24.04+ and macOS have strlcpy/strlcat/wcslcpy/wcslcat in libc
     # GeneralsX @TheSuperHackers @build BenderAI 11/02/2026 Added guards for glibc 2.38+
-    target_compile_definitions(core_config INTERFACE 
-        HAVE_STRLCPY HAVE_STRLCAT HAVE_WCSLCPY HAVE_WCSLCAT)
+    # GeneralsX @build rpi5 11/10/2026 Detect them instead of assuming glibc 2.38+:
+    # Debian 12 / Raspberry Pi OS bookworm ship glibc 2.36, which has none of them,
+    # so stringex.h must provide its own.
+    include(CheckSymbolExists)
+    set(CMAKE_REQUIRED_DEFINITIONS -D_DEFAULT_SOURCE -D_GNU_SOURCE)
+    check_symbol_exists(strlcpy "string.h" HAVE_STRLCPY)
+    check_symbol_exists(strlcat "string.h" HAVE_STRLCAT)
+    check_symbol_exists(wcslcpy "wchar.h" HAVE_WCSLCPY)
+    check_symbol_exists(wcslcat "wchar.h" HAVE_WCSLCAT)
+    unset(CMAKE_REQUIRED_DEFINITIONS)
+    foreach(_libc_func HAVE_STRLCPY HAVE_STRLCAT HAVE_WCSLCPY HAVE_WCSLCAT)
+        if(${_libc_func})
+            target_compile_definitions(core_config INTERFACE ${_libc_func})
+        endif()
+    endforeach()
 endif()
 
 if(RTS_BUILD_OPTION_DEBUG)
