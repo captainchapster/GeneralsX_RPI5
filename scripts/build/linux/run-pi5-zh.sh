@@ -66,18 +66,31 @@ add_aspect_mode() {
 # Xfce's desktop moves icons that do not fit while the game has the display in a smaller mode, and
 # keeps the new layout. Turn its icons off while the game runs and back on afterwards; it then lays
 # them out again from the layout saved for the desktop resolution.
-ICON_STYLE_RESTORE=""
+# xfconf only stores the icon style once it has been changed, so a missing property means the
+# default (file icons); create it to hide them and remove it again afterwards.
+ICONS_HIDDEN=0
+ICON_STYLE_PREV=""
 hide_desktop_icons() {
   command -v xfconf-query >/dev/null 2>&1 && pgrep -x xfdesktop >/dev/null 2>&1 || return 0
-  local style
-  style="$(xfconf-query -c xfce4-desktop -p /desktop-icons/style 2>/dev/null)" || return 0
-  [[ -n "${style}" && "${style}" != "0" ]] || return 0
-  xfconf-query -c xfce4-desktop -p /desktop-icons/style -s 0 && ICON_STYLE_RESTORE="${style}"
+  local style=""
+  if style="$(xfconf-query -c xfce4-desktop -p /desktop-icons/style 2>/dev/null)"; then
+    [[ -n "${style}" && "${style}" != "0" ]] || return 0
+    xfconf-query -c xfce4-desktop -p /desktop-icons/style -s 0 || return 0
+    ICON_STYLE_PREV="${style}"
+  else
+    xfconf-query -c xfce4-desktop -p /desktop-icons/style -n -t int -s 0 || return 0
+  fi
+  ICONS_HIDDEN=1
+  echo "== Hid desktop icons while the game runs"
 }
 restore_desktop_icons() {
-  [[ -n "${ICON_STYLE_RESTORE}" ]] || return 0
-  xfconf-query -c xfce4-desktop -p /desktop-icons/style -s "${ICON_STYLE_RESTORE}" || true
-  ICON_STYLE_RESTORE=""
+  [[ "${ICONS_HIDDEN}" == "1" ]] || return 0
+  if [[ -n "${ICON_STYLE_PREV}" ]]; then
+    xfconf-query -c xfce4-desktop -p /desktop-icons/style -s "${ICON_STYLE_PREV}" || true
+  else
+    xfconf-query -c xfce4-desktop -p /desktop-icons/style -r || true
+  fi
+  ICONS_HIDDEN=0
 }
 
 if [[ "${GENERALSX_EXCLUSIVE_FULLSCREEN}" == "1" && " $* " != *" -win "* ]]; then
@@ -90,7 +103,7 @@ echo "== DXVK_FILTER_DEVICE_NAME=${DXVK_FILTER_DEVICE_NAME}"
 ls "${GAME_DIR}"/*.big >/dev/null 2>&1 || echo "WARNING: no .big files in ${GAME_DIR}"
 ls "${HOME}/GeneralsX/Generals"/*.big >/dev/null 2>&1 || echo "WARNING: no base Generals .big files in ~/GeneralsX/Generals"
 
-if [[ -z "${ICON_STYLE_RESTORE}" ]]; then
+if [[ "${ICONS_HIDDEN}" != "1" ]]; then
   exec "${GAME_DIR}/run.sh" "$@"
 fi
 # Bring the desktop icons back however the game exits.
