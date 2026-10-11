@@ -75,3 +75,4 @@ ls -la "${BUILD_DIR}/GeneralsMD/GeneralsXZH" "${BUILD_DIR}"/libdxvk_d3d*.so*
 echo
 echo "Deploy with: ./scripts/build/linux/deploy-linux-zh.sh ${PRESET}"
 echo "Then run:    ./scripts/build/linux/run-pi5-zh.sh -win"
+echo "Menu entry:  ./scripts/build/linux/install-pi5-desktop.sh (once)"

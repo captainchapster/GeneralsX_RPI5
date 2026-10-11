@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 06:23:36 +0000
+Subject: [PATCH] hud: index text draw infos with a push constant
+
+V3DV lacks drawIndirectFirstInstance, so a non-zero firstInstance in
+the indirect draw arguments is invalid there. Draw each text item with
+its own indirect draw and pass its index as a push constant instead,
+and keep firstInstance at zero as upstream does.
+---
+ src/dxvk/hud/dxvk_hud_renderer.cpp            | 30 ++++++++++---------
+ src/dxvk/hud/shaders/hud_frame_time_eval.comp |  2 +-
+ src/dxvk/hud/shaders/hud_text_vert.vert       |  3 +-
+ 3 files changed, 19 insertions(+), 16 deletions(-)
+
+diff --git a/src/dxvk/hud/dxvk_hud_renderer.cpp b/src/dxvk/hud/dxvk_hud_renderer.cpp
+index 78c175aa..a081b0a3 100644
+--- a/src/dxvk/hud/dxvk_hud_renderer.cpp
++++ b/src/dxvk/hud/dxvk_hud_renderer.cpp
+@@ -188,7 +188,7 @@ namespace dxvk::hud {
+       drawArgs[i].vertexCount = 6u * m_textDraws[i].textLength;
+       drawArgs[i].instanceCount = 1u;
+       drawArgs[i].firstVertex = 0u;
+-      drawArgs[i].firstInstance = uint32_t(i);
++      drawArgs[i].firstInstance = 0u;
+     }
+ 
+     std::memset(m_textBuffer->mapPtr(drawArgOffset + drawArgWriteSize), 0, drawArgsSize - drawArgWriteSize);
+@@ -259,18 +259,18 @@ namespace dxvk::hud {
+       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+       0, sizeof(m_pushConstants), &m_pushConstants);
+ 
+-    // Emit the actual draw call. Without multiDrawIndirect (e.g. V3DV),
+-    // issue one indirect draw per text item; the shader indexes draw
+-    // infos by gl_InstanceIndex, so this is equivalent.
+-    if (m_device->features().core.features.multiDrawIndirect) {
+-      ctx.cmd->cmdDrawIndirect(drawArgs.buffer, drawArgs.offset,
+-        drawCount, sizeof(VkDrawIndirectCommand));
+-    } else {
+-      for (uint32_t i = 0; i < drawCount; i++) {
+-        ctx.cmd->cmdDrawIndirect(drawArgs.buffer,
+-          drawArgs.offset + i * sizeof(VkDrawIndirectCommand),
+-          1, sizeof(VkDrawIndirectCommand));
+-      }
++    // Issue one indirect draw per text item and pass its index as a push
++    // constant. This avoids gl_DrawID (shaderDrawParameters), multi-draw
++    // indirect and a non-zero firstInstance (drawIndirectFirstInstance),
++    // none of which V3DV supports. The HUD only has a handful of draws.
++    for (uint32_t i = 0; i < drawCount; i++) {
++      ctx.cmd->cmdPushConstants(DxvkCmdBuffer::ExecBuffer, m_textPipelineLayout,
++        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
++        sizeof(HudPushConstants), sizeof(i), &i);
++
++      ctx.cmd->cmdDrawIndirect(drawArgs.buffer,
++        drawArgs.offset + i * sizeof(VkDrawIndirectCommand),
++        1, sizeof(VkDrawIndirectCommand));
+     }
+   }
+ 
+@@ -540,7 +540,9 @@ namespace dxvk::hud {
+ 
+     VkPushConstantRange pushConstantRange = { };
+     pushConstantRange.offset = 0u;
+-    pushConstantRange.size = sizeof(HudPushConstants);
++    // The text vertex shader reads one extra dword after the shared
++    // HUD constants: the index of the first draw info for this draw.
++    pushConstantRange.size = sizeof(HudPushConstants) + sizeof(uint32_t);
+     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+ 
+     VkPipelineLayoutCreateInfo info = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+diff --git a/src/dxvk/hud/shaders/hud_frame_time_eval.comp b/src/dxvk/hud/shaders/hud_frame_time_eval.comp
+index 74b8f3c1..3d530672 100644
+--- a/src/dxvk/hud/shaders/hud_frame_time_eval.comp
++++ b/src/dxvk/hud/shaders/hud_frame_time_eval.comp
+@@ -173,7 +173,7 @@ void main() {
+     draw_params[tid].vertex_count = 6u * len;
+     draw_params[tid].instance_count = 1u;
+     draw_params[tid].first_vertex = 0u;
+-    draw_params[tid].first_instance = tid;
++    draw_params[tid].first_instance = 0u;
+   }
+ 
+   barrier();
+diff --git a/src/dxvk/hud/shaders/hud_text_vert.vert b/src/dxvk/hud/shaders/hud_text_vert.vert
+index 736e33a4..f68c7184 100644
+--- a/src/dxvk/hud/shaders/hud_text_vert.vert
++++ b/src/dxvk/hud/shaders/hud_text_vert.vert
+@@ -37,6 +37,7 @@ uniform push_data_t {
+   uvec2 surface_size;
+   float opacity;
+   float scale;
++  uint draw_index;
+ };
+ 
+ layout(location = 0) out vec2 o_texcoord;
+@@ -52,7 +53,7 @@ vec2 unpack_u16(uint v) {
+ }
+ 
+ void main() {
+-  draw_info_t draw_info = draw_infos[gl_InstanceIndex];
++  draw_info_t draw_info = draw_infos[draw_index];
+   o_color = unpackUnorm4x8(draw_info.color);
+ 
+   // Compute character index and vertex index for the current
+-- 
+2.43.0
+
