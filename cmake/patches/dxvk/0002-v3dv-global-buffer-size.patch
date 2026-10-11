@@ -1,0 +1,139 @@
+From ffe587f0dc6bf53bb4288eefe1b57c23c909b2f8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 04:40:37 +0000
+Subject: [PATCH] Size global buffer memory to the buffer's requirements
+
+DXVK created each global buffer after allocating its memory and only
+bound it if vkGetBufferMemoryRequirements reported exactly the chunk
+size. V3DV (Raspberry Pi 5) pads uniform/storage-capable buffers whose
+size is a multiple of 4 KiB, because its ldunifa instruction prefetches
+past the end, so every global buffer was rejected and each buffer
+allocation fell back to a dedicated buffer ("Got allocation from memory
+type 0 without global buffer").
+
+Create the buffer first and allocate memory of the reported size.
+---
+ src/dxvk/dxvk_memory.cpp | 86 +++++++++++++++++++++++-----------------
+ 1 file changed, 49 insertions(+), 37 deletions(-)
+
+diff --git a/src/dxvk/dxvk_memory.cpp b/src/dxvk/dxvk_memory.cpp
+index b6a61c6d..35efa27f 100644
+--- a/src/dxvk/dxvk_memory.cpp
++++ b/src/dxvk/dxvk_memory.cpp
+@@ -1162,64 +1162,76 @@ namespace dxvk {
+       memoryFlags.flags |= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+     }
+ 
+-    // Try to allocate memory. If this fails, free any remaining
+-    // unused memory from the heap and try again.
+-    DxvkDeviceMemory result = { };
+-    result.size = size;
+-
+-    if (vk->vkAllocateMemory(vk->device(), &memoryInfo, nullptr, &result.memory)) {
+-      freeEmptyChunksInHeap(*type.heap, VkDeviceSize(-1), high_resolution_clock::time_point());
+-
+-      if (vk->vkAllocateMemory(vk->device(), &memoryInfo, nullptr, &result.memory))
+-        return DxvkDeviceMemory();
+-    }
++    // Create the global buffer before allocating memory, so that the allocation can
++    // be sized to the buffer's actual requirements. Some drivers report a larger size
++    // than requested: V3DV (Raspberry Pi) pads uniform/storage-capable buffers whose
++    // size is a multiple of 4 KiB, since its ldunifa instruction prefetches past the end.
++    VkBuffer globalBuffer = VK_NULL_HANDLE;
+ 
+-    // Technically redundant if EXT_memory_priority is also supported, but this shouldn't hurt
+-    if (m_device->features().extPageableDeviceLocalMemory.pageableDeviceLocalMemory)
+-      vk->vkSetDeviceMemoryPriorityEXT(vk->device(), result.memory, priorityInfo.priority);
+-
+-    // Create global buffer if the allocation supports it
+     if (type.bufferUsage && !next) {
+-      VkBuffer buffer = VK_NULL_HANDLE;
+-
+       VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+       bufferInfo.size = size;
+       bufferInfo.usage = type.bufferUsage;
+       m_sharingModeInfo.fill(bufferInfo);
+ 
+-      VkResult status = vk->vkCreateBuffer(vk->device(), &bufferInfo, nullptr, &buffer);
+-
+-      if (status == VK_SUCCESS) {
++      if (vk->vkCreateBuffer(vk->device(), &bufferInfo, nullptr, &globalBuffer) == VK_SUCCESS) {
+         VkBufferMemoryRequirementsInfo2 memInfo = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2 };
+-        memInfo.buffer = buffer;
++        memInfo.buffer = globalBuffer;
+ 
+         VkMemoryRequirements2 requirements = { VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2 };
+         vk->vkGetBufferMemoryRequirements2(vk->device(), &memInfo, &requirements);
+ 
+-        if ((requirements.memoryRequirements.size == size)
++        if ((requirements.memoryRequirements.size >= size)
+          && (requirements.memoryRequirements.memoryTypeBits & (1u << type.index))) {
+-          status = vk->vkBindBufferMemory(vk->device(), buffer, result.memory, 0);
++          memoryInfo.allocationSize = requirements.memoryRequirements.size;
++        } else {
++          vk->vkDestroyBuffer(vk->device(), globalBuffer, nullptr);
++          globalBuffer = VK_NULL_HANDLE;
++        }
++      } else {
++        globalBuffer = VK_NULL_HANDLE;
++      }
++    }
++
++    // Try to allocate memory. If this fails, free any remaining
++    // unused memory from the heap and try again.
++    DxvkDeviceMemory result = { };
++    result.size = size;
+ 
+-          if (status == VK_SUCCESS) {
+-            result.buffer = buffer;
++    if (vk->vkAllocateMemory(vk->device(), &memoryInfo, nullptr, &result.memory)) {
++      freeEmptyChunksInHeap(*type.heap, VkDeviceSize(-1), high_resolution_clock::time_point());
+ 
+-            if (type.bufferUsage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+-              result.gpuVa = getBufferDeviceAddress(buffer);
+-          }
+-        }
++      if (vk->vkAllocateMemory(vk->device(), &memoryInfo, nullptr, &result.memory)) {
++        if (globalBuffer)
++          vk->vkDestroyBuffer(vk->device(), globalBuffer, nullptr);
+ 
+-        if (!result.buffer)
+-          vk->vkDestroyBuffer(vk->device(), buffer, nullptr);
++        return DxvkDeviceMemory();
+       }
++    }
++
++    // Technically redundant if EXT_memory_priority is also supported, but this shouldn't hurt
++    if (m_device->features().extPageableDeviceLocalMemory.pageableDeviceLocalMemory)
++      vk->vkSetDeviceMemoryPriorityEXT(vk->device(), result.memory, priorityInfo.priority);
++
++    // Bind the global buffer if the allocation supports it
++    if (globalBuffer) {
++      if (vk->vkBindBufferMemory(vk->device(), globalBuffer, result.memory, 0) == VK_SUCCESS) {
++        result.buffer = globalBuffer;
+ 
+-      if (!result.buffer) {
+-        Logger::warn(str::format("Failed to create global buffer:",
+-          "\n  size:  ", std::dec, size,
+-          "\n  usage: ", std::hex, type.bufferUsage,
+-          "\n  type:  ", std::dec, type.index));
++        if (type.bufferUsage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
++          result.gpuVa = getBufferDeviceAddress(globalBuffer);
++      } else {
++        vk->vkDestroyBuffer(vk->device(), globalBuffer, nullptr);
+       }
+     }
+ 
++    if (type.bufferUsage && !next && !result.buffer) {
++      Logger::warn(str::format("Failed to create global buffer:",
++        "\n  size:  ", std::dec, size,
++        "\n  usage: ", std::hex, type.bufferUsage,
++        "\n  type:  ", std::dec, type.index));
++    }
++
+     result.cookie = ++m_nextCookie;
+ 
+     if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
+-- 
+2.43.0
+

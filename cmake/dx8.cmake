@@ -230,6 +230,15 @@ elseif(SAGE_DXVK_FROM_SOURCE)
   if(NOT DXVK_PATCHES)
     message(FATAL_ERROR "No DXVK patches found in ${CMAKE_CURRENT_LIST_DIR}/patches/dxvk")
   endif()
+  # Fold the patch contents into the patch command, so that adding or editing a
+  # patch changes the command and ExternalProject re-runs the patch step (and
+  # rebuilds DXVK) on the next configure.
+  set(DXVK_PATCHES_HASH "")
+  foreach(_patch IN LISTS DXVK_PATCHES)
+    file(SHA256 "${_patch}" _patch_hash)
+    string(APPEND DXVK_PATCHES_HASH "${_patch_hash}")
+  endforeach()
+  string(SHA256 DXVK_PATCHES_HASH "${DXVK_PATCHES_HASH}")
 
   # DXVK's SDL3 WSI only needs SDL3 headers (it dlopens libSDL3.so.0 at runtime).
   # Debian bookworm has no libsdl3-dev, so point Meson (which looks up "SDL3" by
@@ -254,7 +263,12 @@ Libs:
     GIT_SUBMODULES_RECURSE TRUE
     SOURCE_DIR        ${DXVK_SOURCE_DIR}
     BINARY_DIR        ${DXVK_BUILD_DIR}
-    PATCH_COMMAND     ${GIT_EXECUTABLE} -c user.name=build -c user.email=build@localhost am --3way ${DXVK_PATCHES}
+    # Reset to the pinned commit first so the step can re-run when patches are added or changed
+    PATCH_COMMAND     ${CMAKE_COMMAND} -E echo "Applying DXVK patches (${DXVK_PATCHES_HASH})"
+              COMMAND ${CMAKE_COMMAND} -E rm -rf ${DXVK_SOURCE_DIR}/.git/rebase-apply
+              COMMAND ${GIT_EXECUTABLE} reset --hard ${DXVK_REMOTE_REF}
+              COMMAND ${GIT_EXECUTABLE} clean -fd
+              COMMAND ${GIT_EXECUTABLE} -c user.name=build -c user.email=build@localhost am --3way ${DXVK_PATCHES}
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${DXVK_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}" ${MESON_EXECUTABLE} setup ${DXVK_BUILD_DIR} ${DXVK_SOURCE_DIR} -Ddxvk_native_wsi=sdl3 --buildtype=release --reconfigure
     BUILD_COMMAND     ${MESON_EXECUTABLE} compile -C ${DXVK_BUILD_DIR} dxvk_d3d9 dxvk_d3d8
     INSTALL_COMMAND   ""

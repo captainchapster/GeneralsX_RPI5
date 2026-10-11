@@ -10,6 +10,9 @@ option(RTS_BUILD_OPTION_ASAN "Build code with Address Sanitizer." OFF)
 option(RTS_BUILD_OPTION_VC6_FULL_DEBUG "Build VC6 with full debug info." OFF)
 option(RTS_BUILD_OPTION_FFMPEG "Enable FFmpeg support" OFF)
 option(RTS_BUILD_OPTION_DEEP_CRC "Enable deep CRC snapshots on sync mismatch" ON)
+# GeneralsX @build rpi5 11/10/2026 HD terrain tiles (256px, 8192-wide atlas) need GPUs with 8192+ textures.
+# Turn off for GPUs limited to 4096 (Raspberry Pi 5 V3D) to use the retail 64px tiles and 2048-wide atlas.
+option(RTS_BUILD_OPTION_HD_TERRAIN_TILES "Use 256px HD terrain tiles (needs 8192px textures)" ON)
 
 # Linux/SDL3 and OpenAL options (Phase 1 Linux port)
 option(SAGE_USE_SDL3 "Use SDL3 for windowing/input (Linux/macOS)" OFF)
@@ -46,6 +49,7 @@ add_feature_info(AddressSanitizer RTS_BUILD_OPTION_ASAN "Building with address s
 add_feature_info(Vc6FullDebug RTS_BUILD_OPTION_VC6_FULL_DEBUG "Building VC6 with full debug info")
 add_feature_info(FFmpegSupport RTS_BUILD_OPTION_FFMPEG "Building with FFmpeg support")
 add_feature_info(DeepCRC RTS_BUILD_OPTION_DEEP_CRC "Enable deep CRC snapshots on sync mismatch")
+add_feature_info(HDTerrainTiles RTS_BUILD_OPTION_HD_TERRAIN_TILES "Using 256px HD terrain tiles")
 add_feature_info(SDL3Windowing SAGE_USE_SDL3 "Using SDL3 for windowing (Linux)")
 add_feature_info(OpenALAudio SAGE_USE_OPENAL "Using OpenAL for audio (Linux)")
 add_feature_info(MiniAudioAudio SAGE_USE_MINIAUDIO "Using MiniAudio for audio (Linux/macOS)")
@@ -170,6 +174,11 @@ endif()
 if(RTS_BUILD_OPTION_DEEP_CRC)
     target_compile_definitions(core_config INTERFACE DEEP_CRC_TO_MEMORY=1)
     message(STATUS "Deep CRC logging on sync mismatch enabled")
+endif()
+
+if(NOT RTS_BUILD_OPTION_HD_TERRAIN_TILES)
+    target_compile_definitions(core_config INTERFACE RTS_RETAIL_TERRAIN_TILES)
+    message(STATUS "Retail 64px terrain tiles (2048px atlas)")
 endif()
 
 # macOS MoltenVK detection (Phase 5)
