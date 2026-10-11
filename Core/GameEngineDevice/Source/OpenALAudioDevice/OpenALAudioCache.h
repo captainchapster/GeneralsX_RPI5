@@ -44,6 +44,8 @@ struct PlayingAudio
 	ALuint m_bufferHandle = 0;
 	Bool m_requestStop;
 	Int m_framesFaded;
+	// GeneralsX @bugfix rpi5 11/10/2026 Completed loops of a music stream, for hasMusicTrackCompleted()
+	Int m_loopsCompleted = 0;
 
 	PlayingAudio() :
 		m_type(PAT_INVALID),

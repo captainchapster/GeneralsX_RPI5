@@ -47,6 +47,10 @@ struct PlayingAudio
 	RefCountPtr<DynamicAudioEventRTS> m_audioEventRTS;
 	Bool m_requestStop;
 	Int m_framesFaded;
+	// GeneralsX @bugfix rpi5 11/10/2026 Music loops like Miles (INFINITE_LOOP_COUNT); these track
+	// completed loops for hasMusicTrackCompleted().
+	Int m_loopsCompleted;
+	ma_uint64 m_lastCursor;
 
 	PlayingAudio() :
 		m_sound(NULL),
@@ -54,7 +58,9 @@ struct PlayingAudio
 		m_type(PAT_INVALID),
 		m_audioEventRTS(NULL),
 		m_requestStop(false),
-		m_framesFaded(0)
+		m_framesFaded(0),
+		m_loopsCompleted(0),
+		m_lastCursor(0)
 	{ }
 };
 

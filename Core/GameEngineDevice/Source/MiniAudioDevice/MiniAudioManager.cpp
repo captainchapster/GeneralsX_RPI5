@@ -466,6 +466,12 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 		if ((info->m_soundType == AT_Streaming) && event->getUninterruptible()) {
 			setDisallowSpeech(TRUE);
 		}
+		// GeneralsX @bugfix rpi5 11/10/2026 Loop music until it is stopped, as Miles does with
+		// INFINITE_LOOP_COUNT. Map scripts move to the next track via hasMusicTrackCompleted();
+		// without looping a track played once and the music then stayed silent.
+		if (info->m_soundType == AT_Music) {
+			ma_sound_set_looping(sound, MA_TRUE);
+		}
 		break;
 	}
 
@@ -753,6 +759,19 @@ Bool MiniAudioManager::isMusicPlaying(void) const
 //-------------------------------------------------------------------------------------------------
 Bool MiniAudioManager::hasMusicTrackCompleted(const AsciiString &trackName, Int numberOfTimes) const
 {
+	// GeneralsX @bugfix rpi5 11/10/2026 Mirror Miles: true once the playing music track has
+	// looped at least numberOfTimes.
+	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		PlayingAudio *playing = *it;
+		if (!playing || playing->m_requestStop || !playing->m_audioEventRTS)
+			continue;
+		const AudioEventInfo *info = playing->m_audioEventRTS->getAudioEventInfo();
+		if (!info || info->m_soundType != AT_Music)
+			continue;
+		if (playing->m_audioEventRTS->getEventName() != trackName)
+			continue;
+		return playing->m_loopsCompleted >= numberOfTimes;
+	}
 	return FALSE;
 }
 
@@ -1210,6 +1229,17 @@ void MiniAudioManager::processPlayingList(void)
 			it = m_playingSounds.erase(it);
 			releasePlayingAudio(playing);
 			continue;
+		}
+
+		// GeneralsX @bugfix rpi5 11/10/2026 Count music loops: the cursor jumps back when a
+		// looping track wraps to its start.
+		if (playing->m_type == PAT_Stream && playing->m_sound && ma_sound_is_looping(playing->m_sound)) {
+			ma_uint64 cursor = 0;
+			if (ma_sound_get_cursor_in_pcm_frames(playing->m_sound, &cursor) == MA_SUCCESS) {
+				if (cursor < playing->m_lastCursor)
+					++playing->m_loopsCompleted;
+				playing->m_lastCursor = cursor;
+			}
 		}
 
 		if (m_volumeHasChanged) {

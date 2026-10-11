@@ -1510,11 +1510,10 @@ Bool OpenALAudioManager::hasMusicTrackCompleted(const AsciiString& trackName, In
 		playing = *it;
 		// GeneralsX @bugfix BenderAI 11/03/2026 - guard against null audioEventRTS/info
 		const AudioEventInfo* info = (playing && playing->m_audioEventRTS) ? playing->m_audioEventRTS->getAudioEventInfo() : nullptr;
-		if (info && info->m_soundType == AT_Music) {
+		if (info && info->m_soundType == AT_Music && !playing->m_requestStop) {
 			if (playing->m_audioEventRTS->getEventName() == trackName) {
-				//if (INFINITE_LOOP_COUNT - AIL_stream_loop_count(playing->m_stream) >= numberOfTimes) {
-				// return TRUE;
-				//}
+				// GeneralsX @bugfix rpi5 11/10/2026 Mirror Miles' loop count check
+				return playing->m_loopsCompleted >= numberOfTimes;
 			}
 		}
 	}
@@ -2548,6 +2547,16 @@ void OpenALAudioManager::processPlayingList(void)
 		}
 		playing->m_stream->update();
 
+		// GeneralsX @bugfix rpi5 11/10/2026 Loop music until it is stopped, as Miles does with
+		// INFINITE_LOOP_COUNT. Map scripts move to the next track via hasMusicTrackCompleted();
+		// without looping a track played once and the music then stayed silent.
+		if (playing->m_stream && sourceIsStopped(playing->m_stream->getSource()) && restartMusicStream(playing))
+		{
+			++playing->m_loopsCompleted;
+			++it;
+			continue;
+		}
+
 		// After update(), if stream source is still stopped there is no more data — release it.
 		if (playing->m_stream && sourceIsStopped(playing->m_stream->getSource()))
 		{
@@ -2578,6 +2587,30 @@ void OpenALAudioManager::processPlayingList(void)
 }
 
 
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Rewind a finished music stream by reopening its file.
+Bool OpenALAudioManager::restartMusicStream(PlayingAudio* playing)
+{
+	if (playing->m_requestStop || !playing->m_ffmpegFile || !playing->m_audioEventRTS)
+		return FALSE;
+	const AudioEventInfo* info = playing->m_audioEventRTS->getAudioEventInfo();
+	if (!info || info->m_soundType != AT_Music)
+		return FALSE;
+
+	File* file = TheFileSystem->openFile(playing->m_audioEventRTS->getFilename().str());
+	if (!file)
+		return FALSE;
+
+	// The frame callback that feeds the OpenAL stream survives close()/open().
+	playing->m_ffmpegFile->close();
+	if (!playing->m_ffmpegFile->open(file))
+		return FALSE;
+
+	playing->m_stream->reset();
+	playing->m_stream->update();
+	return !sourceIsStopped(playing->m_stream->getSource());
+}
 
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::processFadingList(void)
