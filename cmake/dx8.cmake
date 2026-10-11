@@ -271,6 +271,9 @@ Libs:
               COMMAND ${GIT_EXECUTABLE} -c user.name=build -c user.email=build@localhost am --3way ${DXVK_PATCHES}
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${DXVK_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}" ${MESON_EXECUTABLE} setup ${DXVK_BUILD_DIR} ${DXVK_SOURCE_DIR} -Ddxvk_native_wsi=sdl3 --buildtype=release --reconfigure
     BUILD_COMMAND     ${MESON_EXECUTABLE} compile -C ${DXVK_BUILD_DIR} dxvk_d3d9 dxvk_d3d8
+    # Let Meson decide what is out of date on every build (a no-op when nothing changed)
+    BUILD_ALWAYS      TRUE
+    BUILD_BYPRODUCTS  ${DXVK_D3D8_LIB} ${DXVK_D3D9_LIB}
     INSTALL_COMMAND   ""
     UPDATE_DISCONNECTED TRUE
   )
@@ -287,7 +290,8 @@ Libs:
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${DXVK_D3D9_LIB} ${DXVK_D3D8_LIB} "${CMAKE_BINARY_DIR}"
     COMMAND ${CMAKE_COMMAND} -E create_symlink libdxvk_d3d9.so.0 "${CMAKE_BINARY_DIR}/libdxvk_d3d9.so"
     COMMAND ${CMAKE_COMMAND} -E create_symlink libdxvk_d3d8.so.0 "${CMAKE_BINARY_DIR}/libdxvk_d3d8.so"
-    DEPENDS dxvk_native_build
+    # Depend on the library files, not just the target, so rebuilt libraries are copied again
+    DEPENDS dxvk_native_build ${DXVK_D3D8_LIB} ${DXVK_D3D9_LIB}
     COMMENT "Installing libdxvk_d3d8 + libdxvk_d3d9 to build directory"
   )
   add_custom_target(dxvk_d3d8_install ALL
