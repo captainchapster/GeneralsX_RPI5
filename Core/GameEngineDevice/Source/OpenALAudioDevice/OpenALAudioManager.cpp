@@ -802,8 +802,12 @@ void OpenALAudioManager::playAudioEvent(AudioRequest* req)
 		if (!handleToKill || foundSoundToReplace) {
 			stream = new OpenALAudioStream;
 			// When we need more data ask FFmpeg for more data.
-			stream->setRequireDataCallback([ffmpegFile, stream]() {
-				ffmpegFile->decodePacket();
+			// GeneralsX @bugfix rpi5 11/10/2026 Note when the decoder reaches the end of the file, so a
+			// music loop can be counted before the stream has played out (see processPlayingList).
+			PlayingAudio* owner = audio;
+			stream->setRequireDataCallback([ffmpegFile, owner]() {
+				if (!ffmpegFile->decodePacket())
+					owner->m_decodeReachedEnd = true;
 				});
 			
 			// When we receive a frame from FFmpeg, send it to OpenAL.
@@ -2547,12 +2551,25 @@ void OpenALAudioManager::processPlayingList(void)
 		}
 		playing->m_stream->update();
 
+		// GeneralsX @bugfix rpi5 11/10/2026 Count a music loop once the decoder has reached the end of
+		// the file, as Miles counts when its stream reader wraps. Map scripts react by fading the
+		// track out and starting the next one; counting only after the restart made that fade play
+		// over the start of the next loop, so the track was heard starting again.
+		const AudioEventInfo* loopInfo = playing->m_audioEventRTS ? playing->m_audioEventRTS->getAudioEventInfo() : nullptr;
+		if (playing->m_decodeReachedEnd && !playing->m_loopCountedEarly && loopInfo && loopInfo->m_soundType == AT_Music)
+		{
+			++playing->m_loopsCompleted;
+			playing->m_loopCountedEarly = true;
+		}
+
 		// GeneralsX @bugfix rpi5 11/10/2026 Loop music until it is stopped, as Miles does with
 		// INFINITE_LOOP_COUNT. Map scripts move to the next track via hasMusicTrackCompleted();
 		// without looping a track played once and the music then stayed silent.
 		if (playing->m_stream && sourceIsStopped(playing->m_stream->getSource()) && restartMusicStream(playing))
 		{
-			++playing->m_loopsCompleted;
+			if (!playing->m_loopCountedEarly)
+				++playing->m_loopsCompleted;
+			playing->m_loopCountedEarly = false;
 			++it;
 			continue;
 		}
@@ -2606,6 +2623,7 @@ Bool OpenALAudioManager::restartMusicStream(PlayingAudio* playing)
 	playing->m_ffmpegFile->close();
 	if (!playing->m_ffmpegFile->open(file))
 		return FALSE;
+	playing->m_decodeReachedEnd = false;
 
 	playing->m_stream->reset();
 	playing->m_stream->update();

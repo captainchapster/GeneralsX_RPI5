@@ -203,6 +203,13 @@ void MiniAudioManager::reset()
 
 	AudioManager::reset();
 	stopAllAudioImmediately();
+	// GeneralsX @bugfix rpi5 11/10/2026 Drop queued requests as Miles and OpenAL do. Sounds requested
+	// while a map was torn down, such as the low power warning when the shell map or a game ended,
+	// otherwise played at the start of the next map.
+	removeAllAudioRequests();
+	// This must come after stopAllAudioImmediately() and removeAllAudioRequests(), to ensure that
+	// sounds pointing to the temporary AudioEventInfo handles are deleted before their info is deleted
+	removeLevelSpecificAudioEventInfos();
 	// GeneralsX @bugfix coolswood 18/07/2026 Restart sound groups in reset() to fix silent audio after loadGame.
 	// stopAllAudioImmediately() releases individual PlayingAudio entries but does not touch the four
 	// ma_sound_group nodes. If a prior pauseAudio() had stopped them (e.g. via the ESC menu used to pick
@@ -464,6 +471,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	// Assign to PlayingAudio before any early returns below
 	audio->m_sound = sound;
 	audio->m_audioBuffer = audioBuffer;
+	audio->m_currentBuffer = audioBuffer;
 
 	switch (info->m_soundType)
 	{
@@ -511,7 +519,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 
 		// GeneralsX @bugfix rpi5 11/10/2026 Loop endless single-file sound effects inside miniaudio
 		// so the loop point is sample accurate. Other looping effects (several files, a delay
-		// between loops or a fixed loop count) restart from processPlayingList() via startNextLoop().
+		// between loops or a fixed loop count) are chained from processPlayingList() via queueNextLoop().
 		if (BitIsSet(info->m_control, AC_LOOP) && info->m_loopCount == 0 &&
 			info->m_sounds.size() == 1 && info->m_delayMax <= 0) {
 			ma_sound_set_looping(sound, MA_TRUE);
@@ -625,6 +633,16 @@ void MiniAudioManager::releaseMiniAudioHandles(PlayingAudio *release)
 		ma_sound_uninit(release->m_sound);
 		free(release->m_sound);
 		release->m_sound = NULL;
+	}
+	if (release->m_currentBuffer && release->m_currentBuffer != release->m_audioBuffer) {
+		ma_audio_buffer_uninit(release->m_currentBuffer);
+		free(release->m_currentBuffer);
+	}
+	release->m_currentBuffer = NULL;
+	if (release->m_queuedBuffer) {
+		ma_audio_buffer_uninit(release->m_queuedBuffer);
+		free(release->m_queuedBuffer);
+		release->m_queuedBuffer = NULL;
 	}
 	if (release->m_audioBuffer) {
 		ma_audio_buffer_uninit(release->m_audioBuffer);
@@ -1244,6 +1262,8 @@ void MiniAudioManager::processPlayingList(void)
 			continue;
 		}
 
+		advanceQueuedLoop(playing);
+
 		// Check if sound has finished playing
 		if (playing->m_sound && !ma_sound_is_playing(playing->m_sound)) {
 			// GeneralsX @bugfix rpi5 11/10/2026 Start the next loop of a looping sound effect, as
@@ -1258,13 +1278,32 @@ void MiniAudioManager::processPlayingList(void)
 			continue;
 		}
 
-		// GeneralsX @bugfix rpi5 11/10/2026 Count music loops: the cursor jumps back when a
-		// looping track wraps to its start.
+		queueNextLoop(playing);
+
+		// GeneralsX @bugfix rpi5 11/10/2026 Count music loops for hasMusicTrackCompleted(). Map
+		// scripts react to a completed track by fading it out and starting the next one. Counting
+		// at the wrap made that fade play over the start of the next loop, so the track was heard
+		// starting again. Miles counts when its stream reader wraps, ahead of playback; here a pass
+		// counts once what is left is no longer than the fade, so the fade covers the track's end.
+		// A wrap still counts if the early check missed it.
 		if (playing->m_type == PAT_Stream && playing->m_sound && ma_sound_is_looping(playing->m_sound)) {
 			ma_uint64 cursor = 0;
-			if (ma_sound_get_cursor_in_pcm_frames(playing->m_sound, &cursor) == MA_SUCCESS) {
-				if (cursor < playing->m_lastCursor)
+			ma_uint64 length = 0;
+			ma_uint32 sampleRate = 0;
+			if (ma_sound_get_cursor_in_pcm_frames(playing->m_sound, &cursor) == MA_SUCCESS &&
+				ma_sound_get_length_in_pcm_frames(playing->m_sound, &length) == MA_SUCCESS &&
+				ma_sound_get_data_format(playing->m_sound, NULL, NULL, &sampleRate, NULL, 0) == MA_SUCCESS) {
+				const Real leadMs = getAudioSettings()->m_fadeAudioFrames * MSEC_PER_LOGICFRAME_REAL + 500.0f;
+				const ma_uint64 leadFrames = (ma_uint64)(leadMs * sampleRate / 1000.0f);
+				if (cursor < playing->m_lastCursor) {
+					if (!playing->m_loopCountedEarly)
+						++playing->m_loopsCompleted;
+					playing->m_loopCountedEarly = false;
+				}
+				else if (!playing->m_loopCountedEarly && length > leadFrames && length - cursor <= leadFrames) {
 					++playing->m_loopsCompleted;
+					playing->m_loopCountedEarly = true;
+				}
 				playing->m_lastCursor = cursor;
 			}
 		}
@@ -1419,9 +1458,9 @@ void MiniAudioManager::closeAnySamplesUsingFile(const void *fileToClose)
 Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 {
 	if (looping->m_requestStop) return false;
-	if (!looping->m_audioEventRTS->hasMoreLoops()) return false;
-
-	looping->m_audioEventRTS->generateFilename();
+	// prepareNextLoop() has already counted this loop and picked its file.
+	looping->m_nextLoopPrepared = false;
+	looping->m_queueFailed = false;
 
 	if (looping->m_audioEventRTS->getDelay() > MSEC_PER_LOGICFRAME_REAL) {
 		looping->m_requestStop = true;
@@ -1436,7 +1475,12 @@ Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 	// GeneralsX @bugfix rpi5 11/10/2026 Decode the next file through FFmpeg like playAudioEvent()
 	// does. ma_sound_init_from_file() cannot read from the game's .big archives, and it re-used
 	// the old ma_sound without releasing the old audio buffer.
-	ma_audio_buffer *buffer = decodeFileToBuffer(looping->m_audioEventRTS->getFilename());
+	// A buffer queued by queueNextLoop() that could not be chained (or was chained too late) is used
+	// as it is.
+	ma_audio_buffer *buffer = looping->m_queuedBuffer;
+	looping->m_queuedBuffer = NULL;
+	if (!buffer)
+		buffer = decodeFileToBuffer(looping->m_audioEventRTS->getFilename());
 	if (!buffer) return false;
 
 	const Bool is3D = (looping->m_type == PAT_3DSample);
@@ -1462,12 +1506,17 @@ Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 		ma_sound_uninit(looping->m_sound);
 		free(looping->m_sound);
 	}
+	if (looping->m_currentBuffer && looping->m_currentBuffer != looping->m_audioBuffer) {
+		ma_audio_buffer_uninit(looping->m_currentBuffer);
+		free(looping->m_currentBuffer);
+	}
 	if (looping->m_audioBuffer) {
 		ma_audio_buffer_uninit(looping->m_audioBuffer);
 		free(looping->m_audioBuffer);
 	}
 	looping->m_sound = sound;
 	looping->m_audioBuffer = buffer;
+	looping->m_currentBuffer = buffer;
 
 	// GeneralsX @bugfix Mr. Meeseeks 19/06/2026 - Initialize loop volume using adjustPlayingVolume
 	adjustPlayingVolume(looping);
@@ -1478,6 +1527,17 @@ Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 //-------------------------------------------------------------------------------------------------
 Bool MiniAudioManager::continueLoopingSound(PlayingAudio *playing)
 {
+	if (!prepareNextLoop(playing)) return false;
+	return startNextLoop(playing);
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Count the next loop of a looping sound effect and pick its
+// file, following the Miles portion and loop count rules. Returns false when no loop follows.
+// Runs once per loop, either when the next loop is queued ahead of time or when the sound ends.
+Bool MiniAudioManager::prepareNextLoop(PlayingAudio *playing)
+{
+	if (playing->m_nextLoopPrepared) return true;
 	if (playing->m_requestStop || !playing->m_audioEventRTS) return false;
 	const AudioEventInfo *info = playing->m_audioEventRTS->getAudioEventInfo();
 	if (!info || !BitIsSet(info->m_control, AC_LOOP)) return false;
@@ -1487,7 +1547,61 @@ Bool MiniAudioManager::continueLoopingSound(PlayingAudio *playing)
 	if (playing->m_audioEventRTS->getNextPlayPortion() != PP_Sound) return false;
 
 	playing->m_audioEventRTS->decreaseLoopCount();
-	return startNextLoop(playing);
+	if (!playing->m_audioEventRTS->hasMoreLoops()) return false;
+
+	playing->m_audioEventRTS->generateFilename();
+	playing->m_nextLoopPrepared = true;
+	return true;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Decode the next loop of a looping sound effect while the
+// current one plays and chain it after the current buffer, so miniaudio moves on to it without a
+// gap. Restarting from processPlayingList() once the sound had ended left a pause of up to a frame
+// plus the decode time between loops, which was audible on engine loops such as jets. Loops with a
+// delay between them, and files whose format differs, still restart through startNextLoop().
+void MiniAudioManager::queueNextLoop(PlayingAudio *playing)
+{
+	if (playing->m_type == PAT_Stream || !playing->m_sound || !playing->m_currentBuffer) return;
+	if (playing->m_queuedBuffer || playing->m_queueFailed || ma_sound_is_looping(playing->m_sound)) return;
+	if (!prepareNextLoop(playing)) return;
+	if (playing->m_audioEventRTS->getDelay() > MSEC_PER_LOGICFRAME_REAL) return;
+
+	ma_audio_buffer *next = decodeFileToBuffer(playing->m_audioEventRTS->getFilename());
+	if (!next) {
+		playing->m_queueFailed = true;
+		return;
+	}
+	playing->m_queuedBuffer = next;
+
+	ma_format curFormat, nextFormat;
+	ma_uint32 curChannels, nextChannels, curRate, nextRate;
+	if (ma_data_source_get_data_format(playing->m_currentBuffer, &curFormat, &curChannels, &curRate, NULL, 0) != MA_SUCCESS ||
+		ma_data_source_get_data_format(next, &nextFormat, &nextChannels, &nextRate, NULL, 0) != MA_SUCCESS ||
+		curFormat != nextFormat || curChannels != nextChannels || curRate != nextRate) {
+		return;
+	}
+	// The audio thread reads this link when it reaches the end of the current buffer. If it got
+	// there first, the sound ends and startNextLoop() plays the queued buffer instead.
+	ma_data_source_set_next(playing->m_currentBuffer, next);
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Once miniaudio has moved on to the queued loop, free the
+// buffer it finished (the chain head stays until the sound is released) so the next loop can be
+// queued.
+void MiniAudioManager::advanceQueuedLoop(PlayingAudio *playing)
+{
+	if (!playing->m_queuedBuffer || !playing->m_audioBuffer) return;
+	if (ma_data_source_get_current(playing->m_audioBuffer) != playing->m_queuedBuffer) return;
+
+	if (playing->m_currentBuffer && playing->m_currentBuffer != playing->m_audioBuffer) {
+		ma_audio_buffer_uninit(playing->m_currentBuffer);
+		free(playing->m_currentBuffer);
+	}
+	playing->m_currentBuffer = playing->m_queuedBuffer;
+	playing->m_queuedBuffer = NULL;
+	playing->m_nextLoopPrepared = false;
 }
 
 //-------------------------------------------------------------------------------------------------

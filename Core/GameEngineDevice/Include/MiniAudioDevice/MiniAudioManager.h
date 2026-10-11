@@ -51,6 +51,18 @@ struct PlayingAudio
 	// completed loops for hasMusicTrackCompleted().
 	Int m_loopsCompleted;
 	ma_uint64 m_lastCursor;
+	// GeneralsX @bugfix rpi5 11/10/2026 Set once this pass of a music track was counted before it
+	// wrapped (see processPlayingList).
+	Bool m_loopCountedEarly;
+	// GeneralsX @bugfix rpi5 11/10/2026 Gapless loops of sound effects. m_audioBuffer is the chain
+	// head the ma_sound was created from, m_currentBuffer the buffer it is playing now, and
+	// m_queuedBuffer the next loop's buffer, chained after m_currentBuffer when the formats match.
+	// m_nextLoopPrepared: the loop count and file name for the next loop are already set.
+	// m_queueFailed: the next loop's file did not decode, so it is not retried every frame.
+	ma_audio_buffer* m_currentBuffer;
+	ma_audio_buffer* m_queuedBuffer;
+	Bool m_nextLoopPrepared;
+	Bool m_queueFailed;
 
 	PlayingAudio() :
 		m_sound(NULL),
@@ -60,7 +72,12 @@ struct PlayingAudio
 		m_requestStop(false),
 		m_framesFaded(0),
 		m_loopsCompleted(0),
-		m_lastCursor(0)
+		m_lastCursor(0),
+		m_loopCountedEarly(false),
+		m_currentBuffer(NULL),
+		m_queuedBuffer(NULL),
+		m_nextLoopPrepared(false),
+		m_queueFailed(false)
 	{ }
 };
 
@@ -170,6 +187,9 @@ protected:
 	Bool startNextLoop(PlayingAudio *looping);
 	// GeneralsX @bugfix rpi5 11/10/2026 Restart a finished looping sound effect; false when it is done.
 	Bool continueLoopingSound(PlayingAudio *playing);
+	Bool prepareNextLoop(PlayingAudio *playing);
+	void queueNextLoop(PlayingAudio *playing);
+	void advanceQueuedLoop(PlayingAudio *playing);
 	// GeneralsX @refactor rpi5 11/10/2026 FFmpeg decode of a whole file into a new ma_audio_buffer.
 	ma_audio_buffer *decodeFileToBuffer(const AsciiString &fileToPlay);
 
