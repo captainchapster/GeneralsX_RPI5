@@ -46,7 +46,7 @@ fi
 
 # vcpkg and some ports need a newer CMake than Debian bookworm's 3.25.
 need_cmake="3.30"
-have_cmake="$(cmake --version 2>/dev/null | head -1 | awk '{print $3}')"
+have_cmake="$(cmake --version 2>/dev/null | head -1 | awk '{print $3}' || true)"
 if [[ -z "${have_cmake}" ]] || [[ "$(printf '%s\n%s\n' "${need_cmake}" "${have_cmake}" | sort -V | head -1)" != "${need_cmake}" ]]; then
   echo "== CMake ${have_cmake:-missing} is older than ${need_cmake}; installing a newer one into ~/.local/zh-venv"
   python3 -m venv "${HOME}/.local/zh-venv"
