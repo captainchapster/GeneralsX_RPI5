@@ -14,14 +14,16 @@
 #   ~/.local/share/icons/generalsx-zh.png                   icon
 #   ~/Desktop/generalsx-zh.desktop                          desktop icon (skip with --no-desktop-icon)
 #
-# The launcher calls run-pi5-zh.sh from this checkout, so run deploy-linux-zh.sh linux-aarch64
-# after each build as usual. Re-run this script if the checkout moves.
+# The launcher calls the run-pi5-zh.sh next to this script (the checkout, or the folder the Pi
+# package installed). Re-run this script if that folder moves.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 RUN_SCRIPT="${SCRIPT_DIR}/run-pi5-zh.sh"
 ICON_SRC="${REPO_ROOT}/assets/generalsx-zh_icon.png"
+# The Pi package keeps the icon next to this script.
+[[ -f "${ICON_SRC}" ]] || ICON_SRC="${SCRIPT_DIR}/generalsx-zh.png"
 
 DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 BIN_DIR="${HOME}/.local/bin"

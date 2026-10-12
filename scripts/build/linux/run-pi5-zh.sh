@@ -8,10 +8,15 @@
 # Expects:
 #   - ./scripts/build/linux/deploy-linux-zh.sh linux-aarch64 has been run
 #   - Zero Hour data (*.big) in ~/GeneralsX/GeneralsZH, base Generals data in ~/GeneralsX/Generals
-#   - A Mesa with V3DV Vulkan 1.3 in $MESA_PREFIX (default /opt/mesa-current, see phase0/build-mesa.sh)
+#   - A Mesa 26+ V3DV driver in $MESA_PREFIX: the mesa/ folder next to this script when installed
+#     from the Pi package, otherwise /opt/mesa-current (see build-pi5-mesa.sh)
 set -euo pipefail
 
-MESA_PREFIX="${MESA_PREFIX:-/opt/mesa-current}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${MESA_PREFIX:-}" ]]; then
+  MESA_PREFIX="/opt/mesa-current"
+  [[ -d "${SCRIPT_DIR}/mesa" ]] && MESA_PREFIX="${SCRIPT_DIR}/mesa"
+fi
 GAME_DIR="${GAME_DIR:-${HOME}/GeneralsX/GeneralsZH}"
 
 icd="$(compgen -G "${MESA_PREFIX}/share/vulkan/icd.d/broadcom_icd*.json" | head -1 || true)"

@@ -35,6 +35,10 @@ elif [[ -d "${LEGACY_RUNTIME_DIR}" ]]; then
     RUNTIME_DIR="${LEGACY_RUNTIME_DIR}"
     echo "INFO: No .big assets found; using existing legacy runtime ${LEGACY_RUNTIME_DIR}"
 fi
+# GeneralsX @build rpi5 12/10/2026 Allow deploying into any directory (used to stage the Pi 5 package)
+if [[ -n "${GENERALSX_DEPLOY_DIR:-}" ]]; then
+    RUNTIME_DIR="${GENERALSX_DEPLOY_DIR}"
+fi
 # Note: CMakeLists.txt uses OUTPUT_NAME GeneralsXZH on Linux (see GeneralsMD/Code/Main/CMakeLists.txt)
 BINARY_SRC="${BUILD_DIR}/GeneralsMD/GeneralsXZH"
 
