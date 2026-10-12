@@ -105,6 +105,7 @@ MiniAudioManager::~MiniAudioManager()
 	DEBUG_ASSERTCRASH(m_binkHandle == NULL, ("Leaked a Bink handle. Chuybregts"));
 	releaseHandleForBink();
 	closeDevice();
+	finishBackgroundDecodes();
 	freeDecodedFiles();
 
 	DEBUG_ASSERTCRASH(this == TheAudio, ("Umm...\n"));
@@ -317,6 +318,10 @@ namespace
 	// Decoded sound files are PCM, about four times the size of the IMA ADPCM files the retail
 	// AudioFootprintInBytes budget was made for; keep at least this much.
 	const size_t MIN_DECODED_CACHE_BYTES = 64 * 1024 * 1024;
+
+	// Files at least this big (music, speech, long effects) are decoded on a worker thread the first
+	// time they play; decoding a music track took up to a second on a Raspberry Pi 5.
+	const Int BACKGROUND_DECODE_MIN_BYTES = 256 * 1024;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -420,20 +425,96 @@ void MiniAudioManager::freeDecodedFiles(void)
 }
 
 //-------------------------------------------------------------------------------------------------
+// Returns TRUE while the request's file is being decoded on a worker thread, starting the decode
+// for a long file that is not cached yet. Once the decode is done the file goes into the cache and
+// the request plays like any other.
+Bool MiniAudioManager::waitForBackgroundDecode(AudioRequest *req)
+{
+	AudioEventRTS *event = req->m_pendingEvent.Peek();
+	if (!event) {
+		return FALSE;
+	}
+	const AsciiString fileName = event->getFilename();
+	if (fileName.isEmpty() || m_decodedFiles.find(fileName) != m_decodedFiles.end()) {
+		return FALSE;
+	}
+
+	PendingDecodeMap::iterator pending = m_pendingDecodes.find(fileName);
+	if (pending != m_pendingDecodes.end()) {
+		if (pending->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+			return TRUE;
+		}
+		DecodedAudioFile *decoded = pending->second.get();
+		m_pendingDecodes.erase(pending);
+		if (decoded) {
+			m_decodedFiles[fileName] = decoded;
+			m_decodedFilesSize += decoded->m_pcm.size();
+		}
+		// A failed decode plays (and fails) as before.
+		return FALSE;
+	}
+
+	FileInfo fileInfo;
+	if (!TheFileSystem->getFileInfo(fileName, &fileInfo) || fileInfo.size() < BACKGROUND_DECODE_MIN_BYTES) {
+		return FALSE;
+	}
+	// Open the file here: the file system is not thread safe, but the open file is only used by the
+	// worker from now on.
+	File *file = TheFileSystem->openFile(fileName.str());
+	if (!file) {
+		return FALSE;
+	}
+	m_pendingDecodes[fileName] = std::async(std::launch::async, &MiniAudioManager::decodeOpenFile, file);
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Removes a play request that is waiting for its file to decode, when a stop for its sound arrives.
+void MiniAudioManager::dropDeferredPlay(AudioHandle handle)
+{
+	for (auto it = m_audioRequests.begin(); it != m_audioRequests.end(); ++it) {
+		AudioRequest *req = (*it);
+		if (req && req->m_request == AR_Play && req->m_pendingEvent.Peek() &&
+			req->m_pendingEvent.Peek()->getPlayingHandle() == handle) {
+			deleteInstance(req);
+			m_audioRequests.erase(it);
+			return;
+		}
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void MiniAudioManager::finishBackgroundDecodes(void)
+{
+	for (PendingDecodeMap::iterator it = m_pendingDecodes.begin(); it != m_pendingDecodes.end(); ++it) {
+		delete it->second.get();
+	}
+	m_pendingDecodes.clear();
+}
+
+//-------------------------------------------------------------------------------------------------
 // Decodes a whole file with FFmpeg to PCM. Returns NULL on failure.
 DecodedAudioFile *MiniAudioManager::decodeFile(const AsciiString &fileToPlay)
 {
-	// Use FFmpeg to decode the file into PCM, then feed to miniaudio.
-	// This avoids miniaudio's built-in decoders which hang on MP3 via VFS.
 	File *file = TheFileSystem->openFile(fileToPlay.str());
 	if (!file) {
 		DEBUG_LOG(("MiniAudio: Failed to open file: %s\n", fileToPlay.str()));
 		return NULL;
 	}
+	return decodeOpenFile(file);
+}
 
+//-------------------------------------------------------------------------------------------------
+// Decodes and closes an open file. Touches no manager state, so it can run on a worker thread: a
+// file opened from a .big archive is already in memory, and memory pools are thread safe.
+DecodedAudioFile *MiniAudioManager::decodeOpenFile(File *file)
+{
+	// Use FFmpeg to decode the file into PCM, then feed to miniaudio.
+	// This avoids miniaudio's built-in decoders which hang on MP3 via VFS.
+	const std::string fileToPlay = file->getName();	// the file is closed with the decoder
 	FFmpegFile *ffmpegFile = NEW FFmpegFile();
 	if (!ffmpegFile->open(file)) {
-		DEBUG_LOG(("MiniAudio: Failed to open FFmpeg file: %s\n", fileToPlay.str()));
+		DEBUG_LOG(("MiniAudio: Failed to open FFmpeg file: %s\n", fileToPlay.c_str()));
 		delete ffmpegFile;
 		return NULL;
 	}
@@ -481,7 +562,7 @@ DecodedAudioFile *MiniAudioManager::decodeFile(const AsciiString &fileToPlay)
 	ffmpegFile = NULL;
 
 	if (pcmData.empty() || sampleRate == 0 || bytesPerSample == 0) {
-		DEBUG_LOG(("MiniAudio: No audio data decoded from: %s\n", fileToPlay.str()));
+		DEBUG_LOG(("MiniAudio: No audio data decoded from: %s\n", fileToPlay.c_str()));
 		return NULL;
 	}
 
@@ -492,7 +573,7 @@ DecodedAudioFile *MiniAudioManager::decodeFile(const AsciiString &fileToPlay)
 	else if (bytesPerSample == 4) maFmt = ma_format_f32;
 
 	if (maFmt == ma_format_unknown) {
-		DEBUG_LOG(("MiniAudio: Unsupported format (%d bps) for: %s\n", bytesPerSample, fileToPlay.str()));
+		DEBUG_LOG(("MiniAudio: Unsupported format (%d bps) for: %s\n", bytesPerSample, fileToPlay.c_str()));
 		return NULL;
 	}
 
@@ -1343,6 +1424,16 @@ void MiniAudioManager::processRequestList(void)
 			adjustRequest(req);
 			++it;
 			continue;
+		}
+
+		// GeneralsX @performance Claude 12/10/2026 A play request for a long file waits here while the
+		// file decodes in the background. A stop for it drops it before it starts.
+		if (req->m_request == AR_Play && waitForBackgroundDecode(req)) {
+			++it;
+			continue;
+		}
+		if (req->m_request == AR_Stop) {
+			dropDeferredPlay(req->m_handleToInteractOn);
 		}
 
 		if (!req->m_requiresCheckForSample || checkForSample(req))

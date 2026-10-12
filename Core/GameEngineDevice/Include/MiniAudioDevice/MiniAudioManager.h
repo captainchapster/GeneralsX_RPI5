@@ -30,8 +30,11 @@
 #include "Common/STLTypedefs.h"
 #include <miniaudio.h>
 
+#include <future>
 #include <unordered_map>
 #include <vector>
+
+class File;
 
 enum { MAXPROVIDERS = 64 };
 
@@ -109,6 +112,10 @@ struct DecodedAudioFile
 };
 
 typedef std::unordered_map< AsciiString, DecodedAudioFile *, rts::hash<AsciiString>, rts::equal_to<AsciiString> > DecodedAudioFileMap;
+
+// GeneralsX @performance Claude 12/10/2026 A long file being decoded on a worker thread. The request
+// to play it waits in the request list until the decode is done, instead of stalling the frame.
+typedef std::unordered_map< AsciiString, std::future<DecodedAudioFile *>, rts::hash<AsciiString>, rts::equal_to<AsciiString> > PendingDecodeMap;
 
 class MiniAudioManager : public AudioManager
 {
@@ -253,6 +260,10 @@ protected:
 	// GeneralsX @performance Claude 12/10/2026 Decoded file cache (see DecodedAudioFile).
 	DecodedAudioFile *openDecodedFile(const AsciiString &fileName);
 	DecodedAudioFile *decodeFile(const AsciiString &fileName);
+	static DecodedAudioFile *decodeOpenFile(File *file);
+	Bool waitForBackgroundDecode(AudioRequest *req);
+	void dropDeferredPlay(AudioHandle handle);
+	void finishBackgroundDecodes(void);
 	void trimDecodedFiles(void);
 	void freeDecodedFiles(void);
 
@@ -291,6 +302,7 @@ protected:
 	std::list<PlayingAudio *> m_stoppedAudio;
 
 	DecodedAudioFileMap m_decodedFiles;
+	PendingDecodeMap m_pendingDecodes;
 	size_t m_decodedFilesSize;
 	UnsignedInt m_decodedFileClock;
 
