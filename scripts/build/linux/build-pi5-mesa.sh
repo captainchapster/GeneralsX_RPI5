@@ -26,13 +26,21 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
   echo "== Installing Mesa build dependencies"
   ${SUDO} apt-get update
   ${SUDO} apt-get install -y \
-    build-essential meson ninja-build pkg-config bison flex glslang-tools wget xz-utils \
-    python3-mako python3-yaml python3-ply python3-packaging \
+    build-essential ninja-build pkg-config bison flex glslang-tools wget xz-utils \
+    python3 python3-venv \
     libdrm-dev libexpat1-dev zlib1g-dev libzstd-dev libudev-dev \
     libx11-dev libxext-dev libxrandr-dev libx11-xcb-dev libxcb1-dev libxcb-dri3-dev \
     libxcb-present-dev libxcb-randr0-dev libxcb-sync-dev libxcb-xfixes0-dev libxshmfence-dev \
-    libxxf86vm-dev libwayland-dev wayland-protocols
+    libxxf86vm-dev
 fi
+
+# Mesa 26 needs Meson 1.4 or newer, and bookworm ships 1.0. Use Meson and Mesa's Python build
+# modules from a venv so the system's packages don't matter.
+VENV="${MESA_VENV:-${HOME}/.local/mesa-venv}"
+python3 -m venv "${VENV}"
+"${VENV}/bin/pip" install --quiet --upgrade "meson>=1.4" mako pyyaml ply packaging
+export PATH="${VENV}/bin:${PATH}"
+meson --version
 
 mkdir -p "${WORK}"
 cd "${WORK}"
@@ -44,7 +52,7 @@ rm -rf build
 meson setup build \
   -Dprefix="${PREFIX}" -Dbuildtype=release \
   -Dvulkan-drivers=broadcom -Dgallium-drivers= -Dllvm=disabled \
-  -Dplatforms=x11,wayland -Dopengl=false -Degl=disabled -Dgbm=disabled -Dglx=disabled \
+  -Dplatforms=x11 -Dopengl=false -Degl=disabled -Dgbm=disabled -Dglx=disabled \
   -Dgles1=disabled -Dgles2=disabled -Dvideo-codecs=
 ninja -C build -j "${JOBS}"
 

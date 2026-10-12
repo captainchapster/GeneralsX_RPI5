@@ -34,6 +34,10 @@ fi
 export VK_ICD_FILENAMES="${icd}"
 export DXVK_FILTER_DEVICE_NAME="${DXVK_FILTER_DEVICE_NAME:-V3D}"
 export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
+# The V3DV driver is built for X11 only, so on a Wayland desktop run through XWayland.
+if [[ -n "${DISPLAY:-}" && -z "${SDL_VIDEO_DRIVER:-}" ]]; then
+  export SDL_VIDEO_DRIVER=x11
+fi
 # Fullscreen switches the display to the game's resolution instead of scaling every frame up to
 # the desktop size, which costs the Pi's GPU a lot on large monitors. Set to 0 for desktop fullscreen.
 export GENERALSX_EXCLUSIVE_FULLSCREEN="${GENERALSX_EXCLUSIVE_FULLSCREEN:-1}"
