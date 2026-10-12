@@ -7,13 +7,28 @@
 #
 # It waits for the game, samples every thread about 200 times a second until the game exits,
 # and writes a text report to ~/GeneralsX/logs/zh-profile.txt (send that file).
+#
+# Call graph mode shows which game functions the time is spent under (for example how much of
+# the frame goes to particles, water or shadows), not only the function at the top of the stack:
+#   ./scripts/qa/profile-pi5-zh.sh callgraph
+# Start the game and a replay, press Enter in this terminal once the replay is playing, and it
+# records the game's main thread for RECORD_SECONDS seconds (default 60). Call stacks are large, so keep
+# the window short.
+#
 # Installs perf (the linux-perf package) when it is missing. Needs sudo.
 set -euo pipefail
 
+MODE="${1:-flat}"
 LOG_DIR="${HOME}/GeneralsX/logs"
 DATA="${LOG_DIR}/zh-profile.data"
 REPORT="${LOG_DIR}/zh-profile.txt"
-FREQUENCY="${FREQUENCY:-199}"
+FOLDED="${LOG_DIR}/zh-profile-folded.txt"
+SECONDS_TO_RECORD="${RECORD_SECONDS:-60}"
+if [[ "${MODE}" == "callgraph" ]]; then
+  FREQUENCY="${FREQUENCY:-99}"
+else
+  FREQUENCY="${FREQUENCY:-199}"
+fi
 mkdir -p "${LOG_DIR}"
 
 if ! command -v perf >/dev/null 2>&1 || ! perf --version >/dev/null 2>&1; then
@@ -27,6 +42,25 @@ while [[ -z "${pid}" ]]; do
   pid="$(pgrep -x GeneralsXZH | head -1 || true)"
   [[ -n "${pid}" ]] || sleep 1
 done
+
+if [[ "${MODE}" == "callgraph" ]]; then
+  read -r -p "== Start a replay, then press Enter to record ${SECONDS_TO_RECORD} s of the main thread " _
+  echo "== Recording GeneralsXZH main thread (pid ${pid}) with call stacks for ${SECONDS_TO_RECORD} s"
+  # The main thread's id is the process id. Stacks are unwound from DWARF debug info (RelWithDebInfo).
+  sudo perf record -F "${FREQUENCY}" -t "${pid}" --call-graph dwarf,16384 -o "${DATA}" -- sleep "${SECONDS_TO_RECORD}" 2>&1 \
+    | grep -v "^\[ perf record: Woken up" || true
+  echo "== Writing ${REPORT} (this can take a few minutes)"
+  sudo chown "$(id -u):$(id -g)" "${DATA}"
+  {
+    echo "# Main thread: time spent inside each function, including everything it calls"
+    perf report -i "${DATA}" --stdio --children --sort sym -g none --percent-limit 0.5 2>/dev/null | grep -v "^$"
+  } > "${REPORT}"
+  perf report -i "${DATA}" --stdio --no-children --sort sym -g folded,0,caller,function,count 2>/dev/null \
+    | grep -v "^#" | grep -v "^$" > "${FOLDED}" || true
+  echo "== Done: send ${REPORT} and ${FOLDED}"
+  exit 0
+fi
+
 echo "== Recording GeneralsXZH (pid ${pid}) until it exits"
 sudo perf record -F "${FREQUENCY}" -p "${pid}" -o "${DATA}" 2>&1 | grep -v "^\[ perf record: Woken up" || true
 

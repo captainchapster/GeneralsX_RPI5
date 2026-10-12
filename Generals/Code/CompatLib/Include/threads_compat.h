@@ -72,13 +72,13 @@ inline void EnterCriticalSection(CRITICAL_SECTION *cs) {
 }
 
 // Leave a critical section (unlock)
+// GeneralsX @bugfix Claude 12/10/2026 Unlock on every leave. The mutex is recursive and is locked once per
+// enter, so unlocking only at depth 0 left it held forever after any nested enter, deadlocking other threads.
 inline void LeaveCriticalSection(CRITICAL_SECTION *cs) {
-    cs->ref_count--;
-    
-    if (cs->ref_count == 0) {
+    if (--cs->ref_count == 0) {
         cs->owner = 0;
-        pthread_mutex_unlock(&cs->mutex);
     }
+    pthread_mutex_unlock(&cs->mutex);
 }
 
 #ifdef __cplusplus
