@@ -116,11 +116,16 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Zero Hour for Raspberry Pi 5 (${GITHUB_REF_NAME})" \
-            --notes "Install on a Raspberry Pi 5 (64-bit OS) with:
+            --notes "Command & Conquer Generals Zero Hour for the Raspberry Pi 5 (64-bit OS). You need your own copy of Generals and Zero Hour.
+
+          1. Download GeneralsXZH-pi5-aarch64.tar.gz below.
+          2. Extract the GeneralsXZH-pi5 folder and double-click Setup in it.
+
+          Or from a terminal:
 
           \`\`\`
           curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install-pi5-zh.sh | bash
           \`\`\`
 
-          You need your own copy of Generals and Zero Hour. See README-PI5.txt in the package." \
+          See README-PI5.txt in the package for help." \
             GeneralsXZH-pi5-aarch64.tar.gz install-pi5-zh.sh

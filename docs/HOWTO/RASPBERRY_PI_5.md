@@ -12,15 +12,20 @@ Nothing replaces your system graphics driver. The package brings its own newer M
 
 ## Install
 
-Open a terminal on the Pi and run:
+1. If your game files are on a USB stick (see below), plug it into the Pi.
+2. Download `GeneralsXZH-pi5-aarch64.tar.gz` from the [releases page](https://github.com/captainchapster/GeneralsX_RPI5/releases/latest).
+3. Open it and extract the `GeneralsXZH-pi5` folder, for example to your Downloads folder.
+4. Open that folder and double-click **Setup**. If the file manager asks, choose **Run** (or **Execute**).
+
+The Setup wizard finds your game files, installs a few system components (it asks for your password if it needs it), copies everything with a progress bar, and adds **C&C Generals Zero Hour** to the Games menu and, if you like, the desktop. When it's done you can delete the downloaded file and folder.
+
+Prefer a terminal? This downloads the latest release and starts the same Setup:
 
 ```bash
 curl -fsSL https://github.com/captainchapster/GeneralsX_RPI5/releases/latest/download/install-pi5-zh.sh | bash
 ```
 
-The installer downloads the game, installs a few system libraries (it asks for your password), copies your game files, and adds **C&C Generals Zero Hour** to the Games menu and the desktop. Plug in the USB stick with your game files first (see below) and the installer finds them by itself; otherwise it opens a window to choose the folders.
-
-You can also download `GeneralsXZH-pi5-aarch64.tar.gz` from the [releases page](https://github.com/captainchapster/GeneralsX_RPI5/releases), unpack it, and run `./install-pi5-zh.sh` from the `GeneralsXZH-pi5` folder.
+Without a desktop (or with `--text`), Setup runs as a text installer in the terminal.
 
 ## Getting the game files onto the Pi
 
@@ -31,7 +36,7 @@ Zero Hour needs both games' folders. Copy them from a Windows PC with the game i
 | EA app | `C:\Program Files\EA Games\Command and Conquer Generals Zero Hour\Command and Conquer Generals Zero Hour` | `C:\Program Files\EA Games\Command and Conquer Generals Zero Hour\Command and Conquer Generals` |
 | Steam and others | see [Getting the Game Files](https://github.com/fbraz3/GeneralsX/wiki/Getting-the-Game-Files) | |
 
-Copy each whole folder. The installer looks for them on USB sticks and other drives and in your home folder. If it can't find them it asks you to choose each folder, or you can pass them in:
+Copy each whole folder. Setup looks for them on USB sticks and other drives and in your home folder, and lets you choose each folder if it can't find them. The text installer can also be given them:
 
 ```bash
 ~/GeneralsX/pi5/install-pi5-zh.sh --zh-data "/media/$USER/USB/Command and Conquer Generals Zero Hour" \
@@ -59,15 +64,14 @@ Online play (Generals Online) is not available in this build.
 
 - Every run writes `~/GeneralsX/logs/zh-last-run.log`. Include it when reporting a problem.
 - Crackling or beeping Bluetooth audio affects the whole Pi, not just the game: the Pi 5's Wi-Fi and Bluetooth share one chip. If you're on a cable, turn Wi-Fi off with `sudo rfkill block wifi`, or permanently with `dtoverlay=disable-wifi` in `/boot/firmware/config.txt`.
-- "no V3DV ICD JSON" means the bundled driver is missing; run the installer again.
+- Setup saves what it did in `~/GeneralsX/logs/setup.log`.
+- "no V3DV ICD JSON" means the bundled driver is missing; run Setup again.
 
 ## Updating and removing
 
-Run the install command again to update; your game files and settings stay. To remove the game program, launcher and menu entry while keeping your game files:
+To update, run Setup from a newer release; your game files, saved games and settings stay.
 
-```bash
-~/GeneralsX/pi5/install-pi5-zh.sh --uninstall
-```
+To remove the game, choose **Uninstall C&C Generals Zero Hour** in the Games menu. It removes the game program, shortcuts and graphics driver, and keeps your game files in `~/GeneralsX`. From a terminal: `~/GeneralsX/pi5/Setup --uninstall`.
 
 ## Building it yourself
 

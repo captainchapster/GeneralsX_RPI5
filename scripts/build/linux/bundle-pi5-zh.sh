@@ -10,9 +10,10 @@
 #   GeneralsXZH-pi5/
 #     game/                 GeneralsXZH, its libraries and run.sh (installed next to the game data)
 #     mesa/                 V3DV Vulkan driver and an ICD JSON that points at it relatively
-#     install-pi5-zh.sh     installer (see its header)
+#     Setup                 Setup wizard (setup-pi5-zh.py), double-click to install
+#     install-pi5-zh.sh     installer the wizard drives (see its header)
 #     run-pi5-zh.sh         launcher
-#     install-pi5-desktop.sh, generalsx-zh.png, README-PI5.txt, VERSION
+#     install-pi5-desktop.sh, generalsx-zh.png, README-PI5.txt, LICENSE.txt, VERSION
 # No game data is included.
 set -euo pipefail
 
@@ -45,9 +46,13 @@ sed -E 's#("library_path"[[:space:]]*:[[:space:]]*")[^"]*"#\1../../../lib/libvul
 mesa_version="$(basename "$(readlink -f "${MESA_PREFIX}")")"
 
 echo "== Staging the launcher and installer"
-cp "${SCRIPT_DIR}/install-pi5-zh.sh" "${SCRIPT_DIR}/run-pi5-zh.sh" "${SCRIPT_DIR}/install-pi5-desktop.sh" "${STAGE}/"
+cp "${SCRIPT_DIR}/setup-pi5-zh.sh" "${STAGE}/Setup"
+cp "${SCRIPT_DIR}/setup-pi5-zh.py" "${SCRIPT_DIR}/install-pi5-zh.sh" "${SCRIPT_DIR}/run-pi5-zh.sh" \
+  "${SCRIPT_DIR}/install-pi5-desktop.sh" "${STAGE}/"
+chmod +x "${STAGE}/Setup" "${STAGE}"/*.sh "${STAGE}/setup-pi5-zh.py"
 cp "${PROJECT_ROOT}/assets/generalsx-zh_icon.png" "${STAGE}/generalsx-zh.png"
 cp "${PROJECT_ROOT}/docs/HOWTO/RASPBERRY_PI_5.md" "${STAGE}/README-PI5.txt"
+cp "${PROJECT_ROOT}/LICENSE.md" "${STAGE}/LICENSE.txt"
 {
   echo "commit=$(git -C "${PROJECT_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "mesa=${mesa_version}"

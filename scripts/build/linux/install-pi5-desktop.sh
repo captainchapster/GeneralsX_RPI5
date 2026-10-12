@@ -13,6 +13,8 @@
 #   ~/.local/share/applications/generalsx-zh.desktop        menu entry
 #   ~/.local/share/icons/generalsx-zh.png                   icon
 #   ~/Desktop/generalsx-zh.desktop                          desktop icon (skip with --no-desktop-icon)
+#   ~/.local/share/applications/generalsx-zh-uninstall.desktop   "Uninstall" menu entry, when Setup
+#                                                           is next to this script (the Pi package)
 #
 # The launcher calls the run-pi5-zh.sh next to this script (the checkout, or the folder the Pi
 # package installed). Re-run this script if that folder moves.
@@ -32,6 +34,8 @@ DESKTOP_FILE="${DATA_HOME}/applications/generalsx-zh.desktop"
 ICON_FILE="${DATA_HOME}/icons/generalsx-zh.png"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "${HOME}/Desktop")"
 DESKTOP_ICON="${DESKTOP_DIR}/generalsx-zh.desktop"
+UNINSTALL_FILE="${DATA_HOME}/applications/generalsx-zh-uninstall.desktop"
+SETUP="${SCRIPT_DIR}/Setup"
 
 refresh_menu() {
   if command -v update-desktop-database >/dev/null 2>&1; then
@@ -40,7 +44,7 @@ refresh_menu() {
 }
 
 if [[ "${1:-}" == "--remove" ]]; then
-  rm -f "${LAUNCHER}" "${DESKTOP_FILE}" "${ICON_FILE}" "${DESKTOP_ICON}"
+  rm -f "${LAUNCHER}" "${DESKTOP_FILE}" "${ICON_FILE}" "${DESKTOP_ICON}" "${UNINSTALL_FILE}"
   refresh_menu
   echo "Removed the Zero Hour menu entry."
   exit 0
@@ -82,6 +86,20 @@ StartupNotify=true
 StartupWMClass=com.fbraz3.GeneralsXZH
 EOF
 chmod 644 "${DESKTOP_FILE}"
+
+if [[ -x "${SETUP}" ]]; then
+  cat > "${UNINSTALL_FILE}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Uninstall C&C Generals Zero Hour
+Comment=Remove GeneralsX Zero Hour; your game files are kept
+Exec="${SETUP}" --uninstall
+Icon=${ICON_FILE}
+Terminal=false
+Categories=Game;
+EOF
+  chmod 644 "${UNINSTALL_FILE}"
+fi
 
 refresh_menu
 
