@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # GeneralsX @build rpi5 12/10/2026
-# Start Setup for Zero Hour on a Raspberry Pi 5. The Pi package ships this as "Setup".
+# Start Setup for Zero Hour on a Raspberry Pi 5. The package's Setup program runs this
+# (setup-pi5-launcher.c), since file managers open a double-clicked script in an editor.
 #
 # Usage:
 #   ./Setup               the Setup wizard on a desktop, the text installer otherwise

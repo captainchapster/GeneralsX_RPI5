@@ -254,7 +254,7 @@ copy_tree "${pkg_dir}/game" "${ZH_DIR}" 80 92 "Installing the game" "${manifest_
 progress 93 "Installing the graphics driver"
 rm -rf "${PI5_DIR}/mesa"
 cp -r "${pkg_dir}/mesa" "${PI5_DIR}/"
-for f in Setup setup-pi5-zh.py run-pi5-zh.sh install-pi5-desktop.sh install-pi5-zh.sh \
+for f in Setup setup-pi5-zh.sh setup-pi5-zh.py run-pi5-zh.sh install-pi5-desktop.sh install-pi5-zh.sh \
          generalsx-zh.png README-PI5.txt LICENSE.txt VERSION; do
   [[ -e "${pkg_dir}/${f}" ]] && cp "${pkg_dir}/${f}" "${PI5_DIR}/"
 done
