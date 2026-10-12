@@ -43,6 +43,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Files marked merge=ours in .gitattributes (the Pi edition's README) keep the Pi version.
+          git config merge.ours.driver true
           git fetch --no-tags "https://github.com/${UPSTREAM_REPO}.git" "${UPSTREAM_BRANCH}"
           upstream="$(git rev-parse FETCH_HEAD)"
           short="$(git rev-parse --short FETCH_HEAD)"

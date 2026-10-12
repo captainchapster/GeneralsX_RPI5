@@ -1,0 +1,3 @@
+# GeneralsX @build rpi5 12/10/2026 The Pi edition keeps its own README when GeneralsX changes
+# theirs. The "ours" merge driver is set up by .github/workflows/sync-upstream.yml.
+README.md merge=ours
