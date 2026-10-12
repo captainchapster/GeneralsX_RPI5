@@ -2,10 +2,10 @@
 # GeneralsX @build rpi5 12/10/2026
 # Install Command & Conquer Generals Zero Hour (GeneralsX) on a Raspberry Pi 5.
 #
-# Most people run the Setup wizard in the GeneralsXZH-pi5 folder instead (setup-pi5-zh.py); it
+# Most people double-click Setup in the GeneralsXZH-pi5 folder instead (setup-pi5-zh.py); it
 # drives this script. From a terminal (64-bit Raspberry Pi OS, Debian bookworm/trixie, Twister OS):
 #   curl -fsSL https://github.com/captainchapster/GeneralsX_RPI5/releases/latest/download/install-pi5-zh.sh | bash
-# or from an unpacked GeneralsXZH-pi5-aarch64.tar.gz:
+# or from an unpacked GeneralsXZH-pi5-aarch64.tar.gz (the script is in its hidden .setup folder):
 #   ./install-pi5-zh.sh [--zh-data DIR] [--generals-data DIR] [--no-desktop-icon] [--text]
 #   ./install-pi5-zh.sh --uninstall
 #
@@ -161,10 +161,10 @@ else
   curl -fL --progress-bar "https://github.com/${REPO}/releases/latest/download/${ASSET}" -o "${tmp}/${ASSET}" \
     || die "could not download ${ASSET} from the ${REPO} releases"
   tar -C "${tmp}" -xzf "${tmp}/${ASSET}"
-  pkg_dir="${tmp}/GeneralsXZH-pi5"
+  pkg_dir="${tmp}/GeneralsXZH-pi5/.setup"
   # On a desktop, carry on in the Setup wizard. It runs from the download, which is removed after.
-  if [[ "${text}" == "0" && "${gui}" == "0" && -x "${pkg_dir}/Setup" ]] && "${pkg_dir}/Setup" --can-show; then
-    "${pkg_dir}/Setup"
+  if [[ "${text}" == "0" && "${gui}" == "0" ]] && bash "${pkg_dir}/setup-pi5-zh.sh" --can-show; then
+    bash "${pkg_dir}/setup-pi5-zh.sh"
     exit $?
   fi
 fi
@@ -254,7 +254,11 @@ copy_tree "${pkg_dir}/game" "${ZH_DIR}" 80 92 "Installing the game" "${manifest_
 progress 93 "Installing the graphics driver"
 rm -rf "${PI5_DIR}/mesa"
 cp -r "${pkg_dir}/mesa" "${PI5_DIR}/"
-for f in Setup setup-pi5-zh.sh setup-pi5-zh.py run-pi5-zh.sh install-pi5-desktop.sh install-pi5-zh.sh \
+# The package keeps Setup one folder up, next to its hidden .setup folder.
+for f in "../Setup" "Setup"; do
+  [[ -x "${pkg_dir}/${f}" ]] && cp "${pkg_dir}/${f}" "${PI5_DIR}/Setup"
+done
+for f in setup-pi5-zh.sh setup-pi5-zh.py run-pi5-zh.sh install-pi5-desktop.sh install-pi5-zh.sh \
          generalsx-zh.png README-PI5.txt LICENSE.txt VERSION; do
   [[ -e "${pkg_dir}/${f}" ]] && cp "${pkg_dir}/${f}" "${PI5_DIR}/"
 done

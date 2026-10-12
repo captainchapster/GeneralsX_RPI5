@@ -1,6 +1,7 @@
 /*
  * GeneralsX @build rpi5 12/10/2026
- * "Setup" program of the Raspberry Pi 5 package: runs setup-pi5-zh.sh from its own folder.
+ * "Setup" program of the Raspberry Pi 5 package: runs setup-pi5-zh.sh from its .setup folder
+ * (in the package) or from its own folder (once installed).
  *
  * File managers such as Thunar open a double-clicked shell script in a text editor, even when it
  * is executable, but run a double-clicked program. This small program is what the package ships
@@ -24,10 +25,16 @@ int main(int argc, char **argv)
 	}
 	self[length] = '\0';
 
+	/* The package keeps the scripts in a hidden .setup folder; the installed copy keeps them
+	 * next to Setup. */
+	const char *folder = dirname(self);
 	char script[PATH_MAX];
-	if (snprintf(script, sizeof(script), "%s/setup-pi5-zh.sh", dirname(self)) >= (int)sizeof(script)) {
+	if (snprintf(script, sizeof(script), "%s/.setup/setup-pi5-zh.sh", folder) >= (int)sizeof(script)) {
 		fprintf(stderr, "Setup: folder path too long\n");
 		return 1;
+	}
+	if (access(script, R_OK) != 0) {
+		snprintf(script, sizeof(script), "%s/setup-pi5-zh.sh", folder);
 	}
 
 	char **args = calloc((size_t)argc + 2, sizeof(char *));

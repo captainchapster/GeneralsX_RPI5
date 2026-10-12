@@ -14,8 +14,8 @@ Nothing replaces your system graphics driver. The package brings its own newer M
 
 1. If your game files are on a USB stick (see below), plug it into the Pi.
 2. Download `GeneralsXZH-pi5-aarch64.tar.gz` from the [releases page](https://github.com/captainchapster/GeneralsX_RPI5/releases/latest).
-3. Open it and extract the `GeneralsXZH-pi5` folder, for example to your Downloads folder.
-4. Open that folder and double-click **Setup**. If the file manager asks, choose **Run** (or **Execute**).
+3. Extract it (right-click it and choose **Extract Here**). You get one folder, `GeneralsXZH-pi5`.
+4. Open that folder and double-click **Setup**.
 
 The Setup wizard finds your game files, installs a few system components (it asks for your password if it needs it), copies everything with a progress bar, and adds **C&C Generals Zero Hour** to the Games menu and, if you like, the desktop. When it's done you can delete the downloaded file and folder.
 
