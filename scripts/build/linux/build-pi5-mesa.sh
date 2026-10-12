@@ -29,9 +29,10 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
     build-essential ninja-build pkg-config bison flex glslang-tools wget xz-utils \
     python3 python3-venv \
     libdrm-dev libexpat1-dev zlib1g-dev libzstd-dev libudev-dev \
-    libx11-dev libxext-dev libxrandr-dev libx11-xcb-dev libxcb1-dev libxcb-dri3-dev \
-    libxcb-present-dev libxcb-randr0-dev libxcb-sync-dev libxcb-xfixes0-dev libxshmfence-dev \
-    libxxf86vm-dev
+    libx11-dev libxext-dev libxfixes-dev libxdamage-dev libxrandr-dev libxxf86vm-dev x11proto-dev \
+    libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-dri3-dev libxcb-glx0-dev libxcb-keysyms1-dev \
+    libxcb-present-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-sync-dev libxcb-xfixes0-dev \
+    libxshmfence-dev
 fi
 
 # Mesa 26 needs Meson 1.4 or newer, and bookworm ships 1.0. Use Meson and Mesa's Python build
