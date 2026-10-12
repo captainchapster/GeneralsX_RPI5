@@ -223,6 +223,7 @@
             "binaryDir": "${sourceDir}/build/${presetName}",
             "cacheVariables": {
                 "SAGE_DXVK_FROM_SOURCE": "ON",
+                "SAGE_CPU_FLAGS": "-mcpu=cortex-a76",
                 "SAGE_UPDATE_CHECK": "OFF",
                 "RTS_BUILD_OPTION_HD_TERRAIN_TILES": "OFF"
             }

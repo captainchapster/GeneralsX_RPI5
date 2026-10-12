@@ -269,7 +269,7 @@ Libs:
               COMMAND ${GIT_EXECUTABLE} reset --hard ${DXVK_REMOTE_REF}
               COMMAND ${GIT_EXECUTABLE} clean -fd
               COMMAND ${GIT_EXECUTABLE} -c user.name=build -c user.email=build@localhost am --3way ${DXVK_PATCHES}
-    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${DXVK_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}" ${MESON_EXECUTABLE} setup ${DXVK_BUILD_DIR} ${DXVK_SOURCE_DIR} -Ddxvk_native_wsi=sdl3 --buildtype=release --reconfigure
+    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${DXVK_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}" ${MESON_EXECUTABLE} setup ${DXVK_BUILD_DIR} ${DXVK_SOURCE_DIR} -Ddxvk_native_wsi=sdl3 --buildtype=release "-Dc_args=${SAGE_CPU_FLAGS}" "-Dcpp_args=${SAGE_CPU_FLAGS}" --reconfigure
     BUILD_COMMAND     ${MESON_EXECUTABLE} compile -C ${DXVK_BUILD_DIR} dxvk_d3d9 dxvk_d3d8
     # Let Meson decide what is out of date on every build (a no-op when nothing changed)
     BUILD_ALWAYS      TRUE

@@ -63,7 +63,8 @@ Online play (Generals Online) is not available in this build.
 ## Troubleshooting
 
 - Every run writes `~/GeneralsX/logs/zh-last-run.log`. Include it when reporting a problem.
-- Frame rate: the log has an `[FPS]` line every 10 seconds and a summary after each match (average, 1% low and worst frame). `grep FPS ~/GeneralsX/logs/zh-last-run.log` shows them. Start the game with `GENERALSX_FPS_LOG=0` to turn this off.
+- Frame rate: the log has an `[FPS]` line every 10 seconds and a summary after each match (average, 1% low and worst frame). Under each line, the time of the average and the worst frame is split into game logic, drawing, waiting for the GPU (present), the frame rate cap and the rest. `[CPU]` lines show the Pi's temperature and clock, and whether it has throttled. `grep -A2 'FPS\|CPU' ~/GeneralsX/logs/zh-last-run.log` shows them. Start the game with `GENERALSX_FPS_LOG=0` to turn this off.
+- The launcher runs the CPU at full speed (the `performance` governor) while the game runs, if sudo works without a password, and switches back afterwards. Start the game with `GENERALSX_CPU_PERFORMANCE=0` to leave it alone.
 - Crackling or beeping Bluetooth audio affects the whole Pi, not just the game: the Pi 5's Wi-Fi and Bluetooth share one chip. If you're on a cable, turn Wi-Fi off with `sudo rfkill block wifi`, or permanently with `dtoverlay=disable-wifi` in `/boot/firmware/config.txt`.
 - Setup saves what it did in `~/GeneralsX/logs/setup.log`.
 - Desktop icons move after a reboot (Xfce): if nothing is plugged into the Pi's second HDMI port, it can come up as a 1024x768 screen during boot, and the desktop lays the icons out on it. Turn it off with `xfconf-query -c displays -p /Default/HDMI-2/Active -s false` (and the same for `/Fallback/HDMI-2/Active`), and add ` video=HDMI-A-2:d` to the end of the line in `/boot/firmware/cmdline.txt`.

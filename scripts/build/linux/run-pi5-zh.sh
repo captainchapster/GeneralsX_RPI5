@@ -105,21 +105,75 @@ restore_desktop_icons() {
   ICONS_HIDDEN=0
 }
 
+# Run the CPU at full speed while the game runs. The default "ondemand" governor lowers the clock
+# whenever the CPU is idle for a moment, which the game's bursty frames often trigger. Changing it
+# needs root, so this only happens when sudo works without a password (the default on Raspberry Pi
+# OS). Set GENERALSX_CPU_PERFORMANCE=0 to leave the governor alone.
+CPU_GOVERNOR_PREV=""
+set_cpu_performance() {
+  [[ "${GENERALSX_CPU_PERFORMANCE:-1}" == "1" ]] || return 0
+  local governor
+  governor="$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null)" || return 0
+  [[ -n "${governor}" && "${governor}" != "performance" ]] || return 0
+  if ! sudo -n true 2>/dev/null; then
+    echo "== CPU governor is ${governor}; the game may run better with 'performance' (needs passwordless sudo)"
+    return 0
+  fi
+  echo performance | sudo -n tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor >/dev/null || return 0
+  CPU_GOVERNOR_PREV="${governor}"
+  echo "== CPU governor set to performance while the game runs (was ${governor})"
+}
+restore_cpu_governor() {
+  [[ -n "${CPU_GOVERNOR_PREV}" ]] || return 0
+  echo "${CPU_GOVERNOR_PREV}" | sudo -n tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor >/dev/null || true
+  CPU_GOVERNOR_PREV=""
+}
+
+# Next to the game's [FPS] lines, log the CPU temperature and clock, and whether the Pi has throttled,
+# so a slow stretch can be told apart from overheating or a weak power supply.
+MONITOR_PID=""
+start_cpu_monitor() {
+  [[ "${GENERALSX_FPS_LOG}" =~ ^[0-9]+$ && "${GENERALSX_FPS_LOG}" -gt 0 ]] || return 0
+  [[ -r /sys/class/thermal/thermal_zone0/temp ]] || return 0
+  (
+    while sleep "${GENERALSX_FPS_LOG}"; do
+      temp="$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)"
+      clock="$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq 2>/dev/null || echo 0)"
+      throttled=""
+      if command -v vcgencmd >/dev/null 2>&1; then
+        throttled=", $(vcgencmd get_throttled 2>/dev/null || true)"
+      fi
+      echo "[CPU] temperature $((temp / 1000)) C, clock $((clock / 1000)) MHz${throttled}"
+    done
+  ) &
+  MONITOR_PID=$!
+}
+stop_cpu_monitor() {
+  [[ -n "${MONITOR_PID}" ]] || return 0
+  kill "${MONITOR_PID}" 2>/dev/null || true
+  MONITOR_PID=""
+}
+
+cleanup() {
+  stop_cpu_monitor
+  restore_cpu_governor
+  restore_desktop_icons
+}
+
 if [[ "${GENERALSX_EXCLUSIVE_FULLSCREEN}" == "1" && " $* " != *" -win "* ]]; then
   add_aspect_mode || true
   hide_desktop_icons || true
 fi
+set_cpu_performance || true
+start_cpu_monitor || true
 
 echo "== VK_ICD_FILENAMES=${VK_ICD_FILENAMES}"
 echo "== DXVK_FILTER_DEVICE_NAME=${DXVK_FILTER_DEVICE_NAME}"
 ls "${GAME_DIR}"/*.big >/dev/null 2>&1 || echo "WARNING: no .big files in ${GAME_DIR}"
 ls "${HOME}/GeneralsX/Generals"/*.big >/dev/null 2>&1 || echo "WARNING: no base Generals .big files in ~/GeneralsX/Generals"
 
-if [[ "${ICONS_HIDDEN}" != "1" ]]; then
-  exec "${GAME_DIR}/run.sh" "$@"
-fi
-# Bring the desktop icons back however the game exits.
-trap restore_desktop_icons EXIT
+# Undo the changes above however the game exits.
+trap cleanup EXIT
 status=0
 "${GAME_DIR}/run.sh" "$@" || status=$?
 exit "${status}"

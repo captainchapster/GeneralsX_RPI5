@@ -50,8 +50,10 @@ cd "${WORK}"
 cd "mesa-${MESA_VER}"
 
 rm -rf build
+# -mcpu=cortex-a76: the Pi 5's CPU; the driver's CPU work is part of every frame.
 meson setup build \
   -Dprefix="${PREFIX}" -Dbuildtype=release \
+  -Dc_args=-mcpu=cortex-a76 -Dcpp_args=-mcpu=cortex-a76 \
   -Dvulkan-drivers=broadcom -Dgallium-drivers= -Dllvm=disabled \
   -Dplatforms=x11 -Dopengl=false -Degl=disabled -Dgbm=disabled -Dglx=disabled \
   -Dgles1=disabled -Dgles2=disabled -Dvideo-codecs=
