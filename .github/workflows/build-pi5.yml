@@ -1,7 +1,8 @@
 # GeneralsX @build rpi5 12/10/2026
 # Build the Raspberry Pi 5 package of Zero Hour (game + Mesa V3DV driver) on an arm64 runner.
 # Pushes to the Pi branch upload the package as a workflow artifact. Pushing a tag named
-# pi5-* also publishes it, with the installer, as a GitHub release.
+# pi5-* also publishes it, with the installer, as a GitHub release, as does running the workflow by
+# hand with a release tag (the release then creates the tag).
 name: Build Pi 5
 
 permissions:
@@ -9,6 +10,11 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release with this tag (pi5-...); leave empty to only build'
+        required: false
+        default: ''
   push:
     branches:
       - 'rpi5/**'
@@ -98,7 +104,7 @@ jobs:
 
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/pi5-')
+    if: startsWith(github.ref, 'refs/tags/pi5-') || startsWith(inputs.release_tag, 'pi5-')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -112,10 +118,12 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          gh release create "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Zero Hour for Raspberry Pi 5 (${GITHUB_REF_NAME})" \
+            --target "${GITHUB_SHA}" \
+            --title "Zero Hour for Raspberry Pi 5 (${RELEASE_TAG})" \
             --notes "Command & Conquer Generals Zero Hour for the Raspberry Pi 5 (64-bit OS). You need your own copy of Generals and Zero Hour.
 
           1. Download GeneralsXZH-pi5-aarch64.tar.gz below.
