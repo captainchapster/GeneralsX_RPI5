@@ -1,6 +1,6 @@
 # Zero Hour on the Raspberry Pi 5
 
-GeneralsX runs Command & Conquer Generals Zero Hour natively on a Raspberry Pi 5. The menu, skirmish, campaign, save/load, videos and LAN play all work, at around 70 FPS in a 1024x768 skirmish with three AI players.
+GeneralsX runs Command & Conquer Generals Zero Hour natively on a Raspberry Pi 5. The menu, skirmish, campaign, save/load, videos and LAN play all work. A 24-minute LAN match on Victory Valley at 1024x768 averaged 35 FPS (slowest 1% of frames: 11 FPS), as measured by the game's own frame rate log.
 
 ## What you need
 

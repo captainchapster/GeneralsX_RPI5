@@ -24,7 +24,7 @@ It started with a simple question: could a Raspberry Pi 5 run Zero Hour? Not thr
 
 The Pi I wanted it on runs Twister OS, dressed up as Windows XP, on a 3440x1440 ultrawide behind a KVM switch. That was the right place for a game from 2003.
 
-The answer turned out to be yes. A full skirmish against three AIs holds around 70 FPS, and the campaign, save/load and the videos all work. One evening the Pi played a LAN match against a Windows PC: two players, two bots, start to finish, without a single desync.
+The answer turned out to be yes. The campaign, skirmish, save/load and the videos all work, and the game logs its own frame rate. In a 24-minute LAN match on Victory Valley at 1024x768, it measured an average of 35 FPS, with the slowest 1% of frames at 11 FPS. One evening the Pi played a LAN match against a Windows PC: two players, two bots, start to finish, without a single desync.
 
 Getting there took a lot of fixes for a 64-bit ARM board that the game was never designed for, and then an installer that feels like it came off a CD in 2003. I ([@captainchapster](https://github.com/captainchapster)) built this port with [Claude Code](https://claude.com/claude-code) as my engineer. It debugged the graphics driver, chased the audio glitches and wrote the Setup wizard, while I tested every build on the real hardware.
 
