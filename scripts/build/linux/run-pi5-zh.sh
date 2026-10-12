@@ -3,7 +3,8 @@
 # Launch the deployed Zero Hour build on a Raspberry Pi 5 with the V3DV Vulkan driver.
 #
 # Usage:
-#   ./scripts/build/linux/run-pi5-zh.sh -win 2>&1 | tee run.log
+#   ./scripts/build/linux/run-pi5-zh.sh -win
+# Output goes to the terminal and to ~/GeneralsX/logs/zh-last-run.log.
 #
 # Expects:
 #   - ./scripts/build/linux/deploy-linux-zh.sh linux-aarch64 has been run
@@ -13,6 +14,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The desktop launcher already writes ~/GeneralsX/logs/zh-last-run.log. When started from a
+# terminal, write the same log too, so a run that hangs or freezes the Pi still leaves one behind.
+if [[ -t 1 ]]; then
+  mkdir -p "${HOME}/GeneralsX/logs"
+  exec > >(tee "${HOME}/GeneralsX/logs/zh-last-run.log") 2>&1
+fi
+
 if [[ -z "${MESA_PREFIX:-}" ]]; then
   MESA_PREFIX="/opt/mesa-current"
   [[ -d "${SCRIPT_DIR}/mesa" ]] && MESA_PREFIX="${SCRIPT_DIR}/mesa"
