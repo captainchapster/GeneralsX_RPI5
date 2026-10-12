@@ -37,7 +37,11 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
     libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
     libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
     libdrm-dev libegl-dev libgles-dev \
-    libasound2-dev libpulse-dev libudev-dev libdbus-1-dev libdisplay-info-dev
+    libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
+  # Optional for SDL3; Raspberry Pi OS has it, plain Debian bookworm only in backports.
+  if apt-cache show libdisplay-info-dev >/dev/null 2>&1; then
+    sudo apt-get install -y libdisplay-info-dev
+  fi
 fi
 
 # vcpkg and some ports need a newer CMake than Debian bookworm's 3.25.
