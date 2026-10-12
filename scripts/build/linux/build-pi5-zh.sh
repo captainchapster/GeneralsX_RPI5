@@ -37,7 +37,8 @@ if [[ "${SKIP_APT:-0}" != "1" ]]; then
     libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
     libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
     libdrm-dev libegl-dev libgles-dev \
-    libasound2-dev libpulse-dev libudev-dev libdbus-1-dev
+    libasound2-dev libpulse-dev libudev-dev libdbus-1-dev \
+    libpng-dev libjpeg-dev libtiff-dev libwebp-dev  # SDL3_image links the system ones (cmake/sdl3.cmake)
   # Optional for SDL3; Raspberry Pi OS has it, plain Debian bookworm only in backports.
   if apt-cache show libdisplay-info-dev >/dev/null 2>&1; then
     sudo apt-get install -y libdisplay-info-dev
