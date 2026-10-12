@@ -34,6 +34,9 @@ fi
 export VK_ICD_FILENAMES="${icd}"
 export DXVK_FILTER_DEVICE_NAME="${DXVK_FILTER_DEVICE_NAME:-V3D}"
 export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
+# Log the measured frame rate every 10 seconds, plus a summary after each match ("[FPS]" lines in
+# ~/GeneralsX/logs/zh-last-run.log). Set to 0 to turn it off.
+export GENERALSX_FPS_LOG="${GENERALSX_FPS_LOG:-10}"
 # The V3DV driver is built for X11 only, so on a Wayland desktop run through XWayland.
 if [[ -n "${DISPLAY:-}" && -z "${SDL_VIDEO_DRIVER:-}" ]]; then
   export SDL_VIDEO_DRIVER=x11

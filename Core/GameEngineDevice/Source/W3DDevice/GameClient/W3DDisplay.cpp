@@ -1312,6 +1312,129 @@ void W3DDisplay::reset()
 
 const UnsignedInt START_CUMU_FRAME = LOGICFRAMES_PER_SECOND / 2;	// skip first half-sec
 
+// GeneralsX @feature Claude 12/10/2026 Measured frame rate in the console log.
+// With GENERALSX_FPS_LOG=<seconds> set, the console log gets a line with the average and worst frame
+// rate every <seconds>, and a summary (average, 1% low, worst frame) when a match ends. This gives
+// real numbers from play sessions without a debug build or an overlay.
+namespace
+{
+	enum { FPS_LOG_BUCKETS = 1000 };	// frame time histogram in 1 ms steps; longer frames go in the last one
+
+	struct FpsLog
+	{
+		Int intervalSecs = -1;	// -1 = not read yet, 0 = off
+		// current interval
+		Real intervalTime = 0.0f;
+		Int intervalFrames = 0;
+		Real intervalWorstFrame = 0.0f;
+		// current match
+		Bool inMatch = false;
+		const char *matchKind = "";
+		Real matchTime = 0.0f;
+		Int matchFrames = 0;
+		Real matchWorstFrame = 0.0f;
+		UnsignedInt matchHistogram[FPS_LOG_BUCKETS] = {0};
+	};
+
+	FpsLog s_fpsLog;
+
+	const char *fpsLogMatchKind()
+	{
+		if (TheGameLogic == nullptr || !TheGameLogic->isInGame() || TheGameLogic->isInShellGame())
+			return nullptr;
+		if (TheGameLogic->isInReplayGame())
+			return "replay";
+		if (TheGameLogic->isInMultiplayerGame())
+			return "multiplayer";
+		if (TheGameLogic->isInSkirmishGame())
+			return "skirmish";
+		return "campaign";
+	}
+
+	void fpsLogEndMatch()
+	{
+		FpsLog &log = s_fpsLog;
+		if (log.matchFrames > 0 && log.matchTime > 0.0f)
+		{
+			// 1% low: the frame rate of the slowest 1% of frames.
+			const UnsignedInt slowFrames = (UnsignedInt)log.matchFrames / 100 + 1;
+			UnsignedInt counted = 0;
+			Int bucket = FPS_LOG_BUCKETS - 1;
+			for (; bucket > 0; --bucket)
+			{
+				counted += log.matchHistogram[bucket];
+				if (counted >= slowFrames)
+					break;
+			}
+			const Real onePercentLow = 1000.0f / (Real)(bucket + 1);
+			fprintf(stderr, "[FPS] match summary (%s, %s): %.0f s, %d frames, average %.1f FPS, 1%% low %.1f FPS, worst frame %.0f ms\n",
+				log.matchKind, TheGlobalData->m_mapName.str(), log.matchTime, log.matchFrames,
+				(Real)log.matchFrames / log.matchTime, onePercentLow, log.matchWorstFrame * 1000.0f);
+			fflush(stderr);
+		}
+		log.inMatch = false;
+		log.matchTime = 0.0f;
+		log.matchFrames = 0;
+		log.matchWorstFrame = 0.0f;
+		memset(log.matchHistogram, 0, sizeof(log.matchHistogram));
+	}
+
+	void fpsLogFrame(Real elapsedSeconds)
+	{
+		FpsLog &log = s_fpsLog;
+		if (log.intervalSecs < 0)
+		{
+			const char *value = getenv("GENERALSX_FPS_LOG");
+			log.intervalSecs = value ? atoi(value) : 0;
+			if (log.intervalSecs < 0)
+				log.intervalSecs = 0;
+		}
+		if (log.intervalSecs == 0)
+			return;
+
+		// Skip the first call and long stalls (loading screens), which are not rendered frames.
+		if (elapsedSeconds <= 0.0f || elapsedSeconds > 2.0f)
+			return;
+
+		const char *kind = fpsLogMatchKind();
+		if (log.inMatch && kind == nullptr)
+			fpsLogEndMatch();
+		else if (!log.inMatch && kind != nullptr)
+		{
+			log.inMatch = true;
+			log.matchKind = kind;
+		}
+
+		// Paused frames say nothing about how the game runs.
+		if (log.inMatch && !TheGameLogic->isGamePaused())
+		{
+			log.matchTime += elapsedSeconds;
+			log.matchFrames++;
+			if (elapsedSeconds > log.matchWorstFrame)
+				log.matchWorstFrame = elapsedSeconds;
+			Int bucket = (Int)(elapsedSeconds * 1000.0f);
+			if (bucket >= FPS_LOG_BUCKETS)
+				bucket = FPS_LOG_BUCKETS - 1;
+			log.matchHistogram[bucket]++;
+		}
+
+		log.intervalTime += elapsedSeconds;
+		log.intervalFrames++;
+		if (elapsedSeconds > log.intervalWorstFrame)
+			log.intervalWorstFrame = elapsedSeconds;
+		if (log.intervalTime >= (Real)log.intervalSecs)
+		{
+			fprintf(stderr, "[FPS] %s: average %.1f FPS, worst frame %.0f ms (%d frames in %.1f s)\n",
+				log.inMatch ? log.matchKind : "menu", (Real)log.intervalFrames / log.intervalTime,
+				log.intervalWorstFrame * 1000.0f, log.intervalFrames, log.intervalTime);
+			fflush(stderr);
+			log.intervalTime = 0.0f;
+			log.intervalFrames = 0;
+			log.intervalWorstFrame = 0.0f;
+		}
+	}
+}
+
 void W3DDisplay::updateAverageFPS()
 {
 	constexpr const Int FPS_HISTORY_SIZE = 30;
@@ -1341,6 +1464,9 @@ void W3DDisplay::updateAverageFPS()
 
 	m_currentFPS = 1.0f/elapsedSeconds;
 	fpsHistory[historyOffset++] = m_currentFPS;
+
+	if (lastUpdateTime64 != 0)
+		fpsLogFrame(elapsedSeconds);
 
 	// determine average frame rate over our past history.
 	const Real sum = std::accumulate(fpsHistory, fpsHistory + FPS_HISTORY_SIZE, 0.0f);
