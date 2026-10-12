@@ -29,6 +29,9 @@
 #include "VideoDevice/FFmpeg/FFmpegFile.h"
 #include "Common/file.h"
 
+#include <cctype>
+#include <cstring>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -47,6 +50,71 @@ FFmpegFile::~FFmpegFile()
 	close();
 }
 
+// GeneralsX @performance Claude 12/10/2026 The container format for the game's audio file
+// extensions, or nullptr to let FFmpeg probe.
+const AVInputFormat *FFmpegFile::guessInputFormat(const char *fileName)
+{
+	const char *extension = fileName ? strrchr(fileName, '.') : nullptr;
+	if (extension == nullptr || strlen(extension) != 4)
+		return nullptr;
+	char lower[5];
+	for (int i = 0; i < 5; ++i)
+		lower[i] = static_cast<char>(tolower(static_cast<unsigned char>(extension[i])));
+	if (strcmp(lower, ".wav") == 0)
+		return av_find_input_format("wav");
+	if (strcmp(lower, ".mp3") == 0)
+		return av_find_input_format("mp3");
+	return nullptr;
+}
+
+// Sets up the custom IO and opens the container; on failure leaves no format or IO context.
+Bool FFmpegFile::openInput(const AVInputFormat *format)
+{
+	m_fmtCtx = avformat_alloc_context();
+	if (!m_fmtCtx) {
+		DEBUG_LOG(("Failed to alloc AVFormatContext"));
+		return false;
+	}
+
+	constexpr size_t avio_ctx_buffer_size = 0x10000;
+	uint8_t *buffer = static_cast<uint8_t *>(av_malloc(avio_ctx_buffer_size));
+	if (buffer == nullptr) {
+		DEBUG_LOG(("Failed to alloc AVIOContextBuffer"));
+		avformat_free_context(m_fmtCtx);
+		m_fmtCtx = nullptr;
+		return false;
+	}
+
+	m_avioCtx = avio_alloc_context(buffer, avio_ctx_buffer_size, 0, m_file, &readPacket, nullptr, nullptr);
+	if (m_avioCtx == nullptr) {
+		DEBUG_LOG(("Failed to alloc AVIOContext"));
+		av_free(buffer);
+		avformat_free_context(m_fmtCtx);
+		m_fmtCtx = nullptr;
+		return false;
+	}
+
+	m_fmtCtx->pb = m_avioCtx;
+	m_fmtCtx->flags |= AVFMT_FLAG_CUSTOM_IO;
+
+	// On failure avformat_open_input() frees the format context and sets it to nullptr.
+#if LIBAVFORMAT_VERSION_MAJOR < 59
+	AVInputFormat *openFormat = const_cast<AVInputFormat *>(format);
+#else
+	const AVInputFormat *openFormat = format;
+#endif
+	const int result = avformat_open_input(&m_fmtCtx, nullptr, openFormat, nullptr);
+	if (result < 0) {
+		char error_buffer[1024];
+		av_strerror(result, error_buffer, sizeof(error_buffer));
+		DEBUG_LOG(("Failed 'avformat_open_input': %s", error_buffer));
+		av_freep(&m_avioCtx->buffer);
+		avio_context_free(&m_avioCtx);
+		return false;
+	}
+	return true;
+}
+
 Bool FFmpegFile::open(File *file)
 {
 	DEBUG_ASSERTCRASH(m_file == nullptr, ("already open"));
@@ -62,42 +130,18 @@ Bool FFmpegFile::open(File *file)
 
 	m_file = file;
 
-	// FFmpeg setup
-	m_fmtCtx = avformat_alloc_context();
-	if (!m_fmtCtx) {
-		DEBUG_LOG(("Failed to alloc AVFormatContext"));
-		close();
-		return false;
+	// GeneralsX @performance Claude 12/10/2026 Open the container named by the file extension first.
+	// Without a format, FFmpeg runs every demuxer's probe on each file, which took a large share of
+	// the CPU time spent starting sounds. Files whose extension does not match are probed as before.
+	const AVInputFormat *formatHint = guessInputFormat(file->getName());
+	if (!openInput(formatHint)) {
+		if (formatHint == nullptr || file->seek(0, File::START) != 0 || !openInput(nullptr)) {
+			close();
+			return false;
+		}
 	}
 
-	constexpr size_t avio_ctx_buffer_size = 0x10000;
-	uint8_t *buffer = static_cast<uint8_t *>(av_malloc(avio_ctx_buffer_size));
-	if (buffer == nullptr) {
-		DEBUG_LOG(("Failed to alloc AVIOContextBuffer"));
-		close();
-		return false;
-	}
-
-	m_avioCtx = avio_alloc_context(buffer, avio_ctx_buffer_size, 0, file, &readPacket, nullptr, nullptr);
-	if (m_avioCtx == nullptr) {
-		DEBUG_LOG(("Failed to alloc AVIOContext"));
-		close();
-		return false;
-	}
-
-	m_fmtCtx->pb = m_avioCtx;
-	m_fmtCtx->flags |= AVFMT_FLAG_CUSTOM_IO;
-
-	int result = avformat_open_input(&m_fmtCtx, nullptr, nullptr, nullptr);
-	if (result < 0) {
-		char error_buffer[1024];
-		av_strerror(result, error_buffer, sizeof(error_buffer));
-		DEBUG_LOG(("Failed 'avformat_open_input': %s", error_buffer));
-		close();
-		return false;
-	}
-
-	result = avformat_find_stream_info(m_fmtCtx, nullptr);
+	int result = avformat_find_stream_info(m_fmtCtx, nullptr);
 	if (result < 0) {
 		char error_buffer[1024];
 		av_strerror(result, error_buffer, sizeof(error_buffer));

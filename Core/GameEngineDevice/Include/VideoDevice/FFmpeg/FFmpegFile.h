@@ -32,6 +32,7 @@
 #include <vector>
 
 struct AVFormatContext;
+struct AVInputFormat;
 struct AVIOContext;
 struct AVCodec;
 struct AVCodecContext;
@@ -84,6 +85,9 @@ private:
 
 	static Int readPacket(void *opaque, UnsignedByte *buf, Int buf_size);
 	const FFmpegStream *findMatch(int type) const;
+	// GeneralsX @performance Claude 12/10/2026 Open with the container named by the extension.
+	static const AVInputFormat *guessInputFormat(const char *fileName);
+	Bool openInput(const AVInputFormat *format);
 
 	FFmpegFrameCallback 		m_frameCallback = nullptr; ///< Callback for frame processing
 	AVFormatContext 			*m_fmtCtx = nullptr; ///< Format context for AVFormat

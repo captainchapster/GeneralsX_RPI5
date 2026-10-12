@@ -65,6 +65,8 @@
 #include "Common/file.h"
 #include "VideoDevice/FFmpeg/FFmpegFile.h"
 
+#include <algorithm>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
@@ -91,7 +93,9 @@ MiniAudioManager::MiniAudioManager() :
 	m_lastSelectedPlaybackDevice(PROVIDER_ERROR),
 	m_binkHandle(NULL),
 	m_pref3DProvider(AsciiString::TheEmptyString),
-	m_prefSpeaker(AsciiString::TheEmptyString)
+	m_prefSpeaker(AsciiString::TheEmptyString),
+	m_decodedFilesSize(0),
+	m_decodedFileClock(0)
 {
 }
 
@@ -101,6 +105,7 @@ MiniAudioManager::~MiniAudioManager()
 	DEBUG_ASSERTCRASH(m_binkHandle == NULL, ("Leaked a Bink handle. Chuybregts"));
 	releaseHandleForBink();
 	closeDevice();
+	freeDecodedFiles();
 
 	DEBUG_ASSERTCRASH(this == TheAudio, ("Umm...\n"));
 	TheAudio = NULL;
@@ -299,10 +304,124 @@ void MiniAudioManager::stopAllAmbientsBy(Drawable *draw)
 }
 
 //-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 12/10/2026 Every ma_audio_buffer the manager creates is the first
+// member of one of these, so freeAudioBuffer() can find the decoded file it plays.
+namespace
+{
+	struct DecodedFileBuffer
+	{
+		ma_audio_buffer m_buffer;
+		DecodedAudioFile *m_file;
+	};
+
+	// Decoded sound files are PCM, about four times the size of the IMA ADPCM files the retail
+	// AudioFootprintInBytes budget was made for; keep at least this much.
+	const size_t MIN_DECODED_CACHE_BYTES = 64 * 1024 * 1024;
+}
+
+//-------------------------------------------------------------------------------------------------
 // GeneralsX @refactor rpi5 11/10/2026 Decode a whole file with FFmpeg into a new ma_audio_buffer
 // (moved out of playAudioEvent so startNextLoop can reuse it). Returns NULL on failure; the caller
-// owns the buffer and frees it with ma_audio_buffer_uninit() + free().
+// owns the buffer and frees it with freeAudioBuffer().
+// GeneralsX @performance Claude 12/10/2026 The file is decoded once and cached; the buffer only
+// keeps its own play position in the shared PCM data.
 ma_audio_buffer *MiniAudioManager::decodeFileToBuffer(const AsciiString &fileToPlay)
+{
+	DecodedAudioFile *decoded = openDecodedFile(fileToPlay);
+	if (!decoded) {
+		return NULL;
+	}
+
+	DecodedFileBuffer *fileBuffer = NEW DecodedFileBuffer;
+	fileBuffer->m_file = decoded;
+	ma_audio_buffer_config abConfig = ma_audio_buffer_config_init(decoded->m_format, decoded->m_channels,
+		decoded->m_frameCount, decoded->m_pcm.data(), NULL);
+	abConfig.sampleRate = decoded->m_sampleRate;
+
+	ma_result result = ma_audio_buffer_init(&abConfig, &fileBuffer->m_buffer);
+	if (result != MA_SUCCESS) {
+		DEBUG_LOG(("MiniAudio: Failed to create audio buffer: %d for '%s'\n", result, fileToPlay.str()));
+		--decoded->m_openCount;
+		delete fileBuffer;
+		return NULL;
+	}
+	fileBuffer->m_buffer.ref.sampleRate = decoded->m_sampleRate;
+
+	return &fileBuffer->m_buffer;
+}
+
+//-------------------------------------------------------------------------------------------------
+void MiniAudioManager::freeAudioBuffer(ma_audio_buffer *buffer)
+{
+	if (!buffer) {
+		return;
+	}
+	DecodedFileBuffer *fileBuffer = reinterpret_cast<DecodedFileBuffer *>(buffer);
+	ma_audio_buffer_uninit(&fileBuffer->m_buffer);
+	--fileBuffer->m_file->m_openCount;
+	delete fileBuffer;
+}
+
+//-------------------------------------------------------------------------------------------------
+DecodedAudioFile *MiniAudioManager::openDecodedFile(const AsciiString &fileName)
+{
+	DecodedAudioFile *decoded = NULL;
+	DecodedAudioFileMap::iterator it = m_decodedFiles.find(fileName);
+	if (it != m_decodedFiles.end()) {
+		decoded = it->second;
+	}
+	else {
+		decoded = decodeFile(fileName);
+		if (!decoded) {
+			return NULL;
+		}
+		m_decodedFiles[fileName] = decoded;
+		m_decodedFilesSize += decoded->m_pcm.size();
+	}
+
+	++decoded->m_openCount;
+	decoded->m_lastUsed = ++m_decodedFileClock;
+	trimDecodedFiles();
+	return decoded;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Evicts the least recently used files that nothing is playing until the cache fits its budget.
+// Files that are playing stay, so the cache can go over budget while many sounds play.
+void MiniAudioManager::trimDecodedFiles(void)
+{
+	const size_t maxSize = std::max<size_t>(getAudioSettings()->m_maxCacheSize, MIN_DECODED_CACHE_BYTES);
+	while (m_decodedFilesSize > maxSize) {
+		DecodedAudioFileMap::iterator oldest = m_decodedFiles.end();
+		for (DecodedAudioFileMap::iterator it = m_decodedFiles.begin(); it != m_decodedFiles.end(); ++it) {
+			if (it->second->m_openCount == 0 &&
+				(oldest == m_decodedFiles.end() || it->second->m_lastUsed < oldest->second->m_lastUsed)) {
+				oldest = it;
+			}
+		}
+		if (oldest == m_decodedFiles.end()) {
+			return;
+		}
+		m_decodedFilesSize -= oldest->second->m_pcm.size();
+		delete oldest->second;
+		m_decodedFiles.erase(oldest);
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void MiniAudioManager::freeDecodedFiles(void)
+{
+	for (DecodedAudioFileMap::iterator it = m_decodedFiles.begin(); it != m_decodedFiles.end(); ++it) {
+		DEBUG_ASSERTCRASH(it->second->m_openCount == 0, ("Decoded audio file '%s' is still playing", it->first.str()));
+		delete it->second;
+	}
+	m_decodedFiles.clear();
+	m_decodedFilesSize = 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Decodes a whole file with FFmpeg to PCM. Returns NULL on failure.
+DecodedAudioFile *MiniAudioManager::decodeFile(const AsciiString &fileToPlay)
 {
 	// Use FFmpeg to decode the file into PCM, then feed to miniaudio.
 	// This avoids miniaudio's built-in decoders which hang on MP3 via VFS.
@@ -320,7 +439,7 @@ ma_audio_buffer *MiniAudioManager::decodeFileToBuffer(const AsciiString &fileToP
 	}
 
 	// Decode all audio frames into a buffer
-	std::vector<uint8_t> pcmData;
+	std::vector<ma_uint8> pcmData;
 	int sampleRate = 0;
 	int channels = 0;
 	int bytesPerSample = 0;
@@ -336,16 +455,19 @@ ma_audio_buffer *MiniAudioManager::decodeFileToBuffer(const AsciiString &fileToP
 			static_cast<AVSampleFormat>(frame->format), 1);
 		if (frameSize <= 0) return;
 
+		const size_t offset = pcmData.size();
+		pcmData.resize(offset + frameSize);
+		ma_uint8 *dst = pcmData.data() + offset;
 		if (av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format))) {
 			// Interleave planar audio
 			for (int s = 0; s < frame->nb_samples; s++) {
 				for (int c = 0; c < channels; c++) {
-					const uint8_t *src = frame->data[c] + s * bytesPerSample;
-					pcmData.insert(pcmData.end(), src, src + bytesPerSample);
+					memcpy(dst, frame->data[c] + s * bytesPerSample, bytesPerSample);
+					dst += bytesPerSample;
 				}
 			}
 		} else {
-			pcmData.insert(pcmData.end(), frame->data[0], frame->data[0] + frameSize);
+			memcpy(dst, frame->data[0], frameSize);
 		}
 	};
 
@@ -374,22 +496,13 @@ ma_audio_buffer *MiniAudioManager::decodeFileToBuffer(const AsciiString &fileToP
 		return NULL;
 	}
 
-	// Create audio buffer — init_copy copies data into internal storage
-	// so it's safe when pcmData goes out of scope after this function returns.
-	ma_audio_buffer *audioBuffer = (ma_audio_buffer *)malloc(sizeof(ma_audio_buffer));
-	ma_audio_buffer_config abConfig = ma_audio_buffer_config_init(maFmt, channels,
-		pcmData.size() / ma_get_bytes_per_frame(maFmt, channels),
-		pcmData.data(), NULL);
-
-	ma_result result = ma_audio_buffer_init_copy(&abConfig, audioBuffer);
-	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to create audio buffer: %d for '%s'\n", result, fileToPlay.str()));
-		free(audioBuffer);
-		return NULL;
-	}
-	audioBuffer->ref.sampleRate = sampleRate;
-
-	return audioBuffer;
+	DecodedAudioFile *decoded = NEW DecodedAudioFile;
+	decoded->m_format = maFmt;
+	decoded->m_channels = channels;
+	decoded->m_sampleRate = sampleRate;
+	decoded->m_frameCount = pcmData.size() / ma_get_bytes_per_frame(maFmt, channels);
+	decoded->m_pcm.swap(pcmData);
+	return decoded;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -461,8 +574,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	result = ma_sound_init_from_data_source(&m_engine, audioBuffer, flags, groupToUse, sound);
 	if (result != MA_SUCCESS) {
 		DEBUG_LOG(("MiniAudio: Failed to init sound: %d for '%s'\n", result, fileToPlay.str()));
-		ma_audio_buffer_uninit(audioBuffer);
-		free(audioBuffer);
+		freeAudioBuffer(audioBuffer);
 		free(sound);
 		releasePlayingAudio(audio);
 		return;
@@ -635,18 +747,15 @@ void MiniAudioManager::releaseMiniAudioHandles(PlayingAudio *release)
 		release->m_sound = NULL;
 	}
 	if (release->m_currentBuffer && release->m_currentBuffer != release->m_audioBuffer) {
-		ma_audio_buffer_uninit(release->m_currentBuffer);
-		free(release->m_currentBuffer);
+		freeAudioBuffer(release->m_currentBuffer);
 	}
 	release->m_currentBuffer = NULL;
 	if (release->m_queuedBuffer) {
-		ma_audio_buffer_uninit(release->m_queuedBuffer);
-		free(release->m_queuedBuffer);
+		freeAudioBuffer(release->m_queuedBuffer);
 		release->m_queuedBuffer = NULL;
 	}
 	if (release->m_audioBuffer) {
-		ma_audio_buffer_uninit(release->m_audioBuffer);
-		free(release->m_audioBuffer);
+		freeAudioBuffer(release->m_audioBuffer);
 		release->m_audioBuffer = NULL;
 	}
 	release->m_type = PAT_INVALID;
@@ -1489,8 +1598,7 @@ Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 		is3D ? 0 : (MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH),
 		is3D ? &m_sound3DGroup : &m_soundGroup, sound);
 	if (result != MA_SUCCESS) {
-		ma_audio_buffer_uninit(buffer);
-		free(buffer);
+		freeAudioBuffer(buffer);
 		free(sound);
 		return false;
 	}
@@ -1507,12 +1615,10 @@ Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 		free(looping->m_sound);
 	}
 	if (looping->m_currentBuffer && looping->m_currentBuffer != looping->m_audioBuffer) {
-		ma_audio_buffer_uninit(looping->m_currentBuffer);
-		free(looping->m_currentBuffer);
+		freeAudioBuffer(looping->m_currentBuffer);
 	}
 	if (looping->m_audioBuffer) {
-		ma_audio_buffer_uninit(looping->m_audioBuffer);
-		free(looping->m_audioBuffer);
+		freeAudioBuffer(looping->m_audioBuffer);
 	}
 	looping->m_sound = sound;
 	looping->m_audioBuffer = buffer;
@@ -1596,8 +1702,7 @@ void MiniAudioManager::advanceQueuedLoop(PlayingAudio *playing)
 	if (ma_data_source_get_current(playing->m_audioBuffer) != playing->m_queuedBuffer) return;
 
 	if (playing->m_currentBuffer && playing->m_currentBuffer != playing->m_audioBuffer) {
-		ma_audio_buffer_uninit(playing->m_currentBuffer);
-		free(playing->m_currentBuffer);
+		freeAudioBuffer(playing->m_currentBuffer);
 	}
 	playing->m_currentBuffer = playing->m_queuedBuffer;
 	playing->m_queuedBuffer = NULL;
