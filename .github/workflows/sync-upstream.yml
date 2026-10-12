@@ -1,0 +1,95 @@
+# GeneralsX @build rpi5 12/10/2026
+# Keep the Raspberry Pi 5 branch following GeneralsX. Every Monday (or when run by hand) this merges
+# the GeneralsX main branch into a copy of the Pi branch:
+# - Nothing new upstream: nothing to do.
+# - Clean merge: the result goes to the rpi5/upstream-sync branch, a pull request into the Pi
+#   branch is opened (or updated), and the Pi build runs on it. Merge the pull request once the
+#   build is green.
+# - Conflicts: the run fails and its summary lists the conflicting files, to be merged by hand.
+name: Sync GeneralsX upstream
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: fbraz3/GeneralsX
+  UPSTREAM_BRANCH: main
+  PI_BRANCH: rpi5/phase1-aarch64
+  SYNC_BRANCH: rpi5/upstream-sync
+
+jobs:
+  sync:
+    name: Merge GeneralsX into the Pi branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PI_BRANCH }}
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags "https://github.com/${UPSTREAM_REPO}.git" "${UPSTREAM_BRANCH}"
+          upstream="$(git rev-parse FETCH_HEAD)"
+          short="$(git rev-parse --short FETCH_HEAD)"
+
+          if git merge-base --is-ancestor "${upstream}" HEAD; then
+            echo "The Pi branch already has GeneralsX ${UPSTREAM_BRANCH} (${short})." >> "${GITHUB_STEP_SUMMARY}"
+            echo "result=current" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          count="$(git rev-list --count "HEAD..${upstream}")"
+          if git merge --no-edit -m "chore(sync): merge GeneralsX ${UPSTREAM_BRANCH} (${short}) into the Pi branch" "${upstream}"; then
+            echo "Merged ${count} new GeneralsX commits (${short}) cleanly." >> "${GITHUB_STEP_SUMMARY}"
+            echo "result=merged" >> "${GITHUB_OUTPUT}"
+            echo "count=${count}" >> "${GITHUB_OUTPUT}"
+            echo "short=${short}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          {
+            echo "Merging ${count} new GeneralsX commits (${short}) conflicts in these files:"
+            echo
+            git diff --name-only --diff-filter=U | sed 's/^/- /'
+            echo
+            echo "Merge GeneralsX ${UPSTREAM_BRANCH} into ${PI_BRANCH} by hand."
+          } >> "${GITHUB_STEP_SUMMARY}"
+          git merge --abort
+          echo "::error::The GeneralsX merge has conflicts; see the run summary."
+          exit 1
+
+      - name: Push, open the pull request and build
+        if: steps.merge.outputs.result == 'merged'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.merge.outputs.count }}
+          SHORT: ${{ steps.merge.outputs.short }}
+        run: |
+          git push --force origin "HEAD:refs/heads/${SYNC_BRANCH}"
+
+          # Pushes made with the workflow token start no workflows, so start the Pi build directly.
+          gh workflow run build-pi5.yml --ref "${SYNC_BRANCH}"
+
+          if [[ -z "$(gh pr list --head "${SYNC_BRANCH}" --base "${PI_BRANCH}" --state open --json number --jq '.[].number')" ]]; then
+            body="Merges ${COUNT} new commits from ${UPSTREAM_REPO} ${UPSTREAM_BRANCH} (${SHORT}) into the Pi branch. Merge once the Build Pi 5 check is green."
+            if ! gh pr create --head "${SYNC_BRANCH}" --base "${PI_BRANCH}" \
+                --title "chore(sync): merge GeneralsX ${UPSTREAM_BRANCH} (${SHORT})" --body "${body}"; then
+              # Needs Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".
+              echo "::warning::Could not open the pull request; open one from ${SYNC_BRANCH} into ${PI_BRANCH}."
+            fi
+          fi
