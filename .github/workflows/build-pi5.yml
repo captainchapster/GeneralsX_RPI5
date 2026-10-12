@@ -127,5 +127,5 @@ jobs:
           curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install-pi5-zh.sh | bash
           \`\`\`
 
-          See README-PI5.txt in the package for help." \
+          See README.txt in the package for help. This is an unofficial build: please report problems on this fork, not to GeneralsX." \
             GeneralsXZH-pi5-aarch64.tar.gz install-pi5-zh.sh
