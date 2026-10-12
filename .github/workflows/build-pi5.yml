@@ -43,8 +43,10 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Cache vcpkg
-        uses: actions/cache@v5
+      # Restore and save separately so a later failure still keeps the slow vcpkg builds.
+      - name: Restore vcpkg cache
+        id: cache-vcpkg
+        uses: actions/cache/restore@v5
         with:
           path: |
             /opt/vcpkg
@@ -68,6 +70,15 @@ jobs:
         run: |
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           ./scripts/build/linux/build-pi5-zh.sh
+
+      - name: Save vcpkg cache
+        if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            /opt/vcpkg
+            /github/home/.cache/vcpkg/archives
+          key: vcpkg-pi5-${{ hashFiles('vcpkg.json', 'vcpkg-lock.json') }}
 
       - name: Package
         run: |
