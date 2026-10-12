@@ -16,7 +16,9 @@
 #   ~/GeneralsX/Generals     your base Generals data (Zero Hour needs both)
 #   ~/GeneralsX/pi5          launcher and the bundled Mesa V3DV Vulkan driver
 #   a "C&C Generals Zero Hour" menu entry and desktop icon
-# The system's own Mesa is not touched. No game data is downloaded: bring your own copy.
+# The system's own Mesa is not touched. No game data is downloaded: bring your own copy. The
+# installer finds the Generals and Zero Hour folders on USB sticks, other drives or in the home
+# folder, and otherwise asks for them (a folder picker on the desktop, a prompt in a terminal).
 set -euo pipefail
 
 REPO="${GENERALSX_PI5_REPO:-captainchapster/GeneralsX_RPI5}"
@@ -37,7 +39,7 @@ while [[ $# -gt 0 ]]; do
     --generals-data) generals_src="$2"; shift 2 ;;
     --no-desktop-icon) desktop_args+=(--no-desktop-icon); shift ;;
     --uninstall) uninstall=1; shift ;;
-    -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,23p' "${BASH_SOURCE[0]}" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -93,7 +95,7 @@ if [[ "${SKIP_APT:-0}" == "1" ]]; then
 elif command -v apt-get >/dev/null 2>&1; then
   say "Installing the system libraries the game uses (needs sudo)"
   pkgs=(libvulkan1 libdrm2 libx11-xcb1 libxcb-dri3-0 libxcb-present0 libxcb-randr0 libxcb-sync1
-        libxcb-xfixes0 libxshmfence1 libwayland-client0 libexpat1 libzstd1 x11-xserver-utils)
+        libxcb-xfixes0 libxshmfence1 libwayland-client0 libexpat1 libzstd1 x11-xserver-utils zenity)
   for alt in "libasound2t64 libasound2" "libpulse0" "libudev1"; do
     name="$(pick ${alt})"
     [[ -n "${name}" ]] && pkgs+=("${name}")
@@ -105,28 +107,60 @@ else
 fi
 
 # --- Game data ---------------------------------------------------------------------------------
-has_big() { [[ -n "$(compgen -G "$1/*.big" 2>/dev/null)" || -n "$(compgen -G "$1/*.BIG" 2>/dev/null)" ]]; }
-ask_dir() {
-  local prompt="$1" answer=""
-  [[ -r /dev/tty ]] || return 0
-  printf '%s\n> ' "${prompt}" > /dev/tty
-  IFS= read -r answer < /dev/tty || true
-  answer="${answer/#\~/${HOME}}"
-  echo "${answer}"
+# A Zero Hour folder holds INIZH.big and a Generals folder INI.big (any letter case).
+has_file() { [[ -n "$(find "$1" -maxdepth 1 -iname "$2" -print -quit 2>/dev/null)" ]]; }
+is_zh_dir() { has_file "$1" 'INIZH.big'; }
+is_generals_dir() { has_file "$1" 'INI.big' && ! is_zh_dir "$1"; }
+
+# find_data_dir CHECK MARKER: look on USB sticks and other mounted drives, then in the home folder.
+find_data_dir() {
+  local check="$1" marker="$2" root found
+  for root in "/media/${USER:-}" /media "/run/media/${USER:-}" /mnt "${HOME}"; do
+    [[ -d "${root}" ]] || continue
+    while IFS= read -r found; do
+      if "${check}" "$(dirname "${found}")"; then
+        dirname "${found}"
+        return
+      fi
+    done < <(find "${root}" -maxdepth 5 -path "${BASE_DIR}" -prune -o -iname "${marker}" -print 2>/dev/null || true)
+  done
 }
-copy_data() {
-  local label="$1" src="$2" dest="$3"
-  if [[ -z "${src}" ]] && ! has_big "${dest}"; then
-    src="$(ask_dir "Where is your ${label} folder (the one with the .big files)? Leave empty to skip.")"
+
+# A folder picker window on the desktop, otherwise a question in the terminal.
+ask_dir() {
+  local label="$1" answer=""
+  if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v zenity >/dev/null 2>&1; then
+    zenity --info --width=420 --title="GeneralsX installer" \
+      --text="Choose your ${label} folder, the one with the .big files.\n\nCancel in the next window to skip this for now." 2>/dev/null || true
+    zenity --file-selection --directory --title="Choose your ${label} folder" 2>/dev/null || true
+    return
   fi
+  [[ -r /dev/tty ]] || return 0
+  printf 'Where is your %s folder (the one with the .big files)? Leave empty to skip.\n> ' "${label}" > /dev/tty
+  IFS= read -r answer < /dev/tty || true
+  echo "${answer/#\~/${HOME}}"
+}
+
+# copy_data LABEL SOURCE DEST CHECK MARKER
+copy_data() {
+  local label="$1" src="$2" dest="$3" check="$4" marker="$5"
+  if [[ -z "${src}" ]]; then
+    if "${check}" "${dest}"; then
+      echo "${label} data is already in ${dest}"
+      return 0
+    fi
+    src="$(find_data_dir "${check}" "${marker}")"
+    [[ -n "${src}" ]] && echo "Found ${label} data in ${src}"
+  fi
+  [[ -n "${src}" ]] || src="$(ask_dir "${label}")"
   [[ -n "${src}" ]] || return 0
-  has_big "${src}" || die "${src} has no .big files; point at the ${label} install folder"
+  "${check}" "${src}" || die "${src} has no ${marker}; choose the ${label} install folder"
   say "Copying ${label} data from ${src} to ${dest}"
   mkdir -p "${dest}"
   cp -r "${src}/." "${dest}/"
 }
-copy_data "Zero Hour" "${zh_src}" "${ZH_DIR}"
-copy_data "Generals (base game)" "${generals_src}" "${GENERALS_DIR}"
+copy_data "Zero Hour" "${zh_src}" "${ZH_DIR}" is_zh_dir 'INIZH.big'
+copy_data "Generals (base game)" "${generals_src}" "${GENERALS_DIR}" is_generals_dir 'INI.big'
 
 # --- Install -----------------------------------------------------------------------------------
 say "Installing the game into ${ZH_DIR}"
@@ -144,8 +178,8 @@ chmod +x "${PI5_DIR}"/*.sh
 
 # --- Done --------------------------------------------------------------------------------------
 missing=()
-has_big "${ZH_DIR}" || missing+=("Zero Hour data in ${ZH_DIR}")
-has_big "${GENERALS_DIR}" || missing+=("Generals data in ${GENERALS_DIR}")
+is_zh_dir "${ZH_DIR}" || missing+=("Zero Hour data in ${ZH_DIR}")
+is_generals_dir "${GENERALS_DIR}" || missing+=("Generals data in ${GENERALS_DIR}")
 say "Installed"
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "Still needed before the game can start:"

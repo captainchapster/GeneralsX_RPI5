@@ -18,7 +18,7 @@ Open a terminal on the Pi and run:
 curl -fsSL https://github.com/captainchapster/GeneralsX_RPI5/releases/latest/download/install-pi5-zh.sh | bash
 ```
 
-The installer downloads the game, installs a few system libraries (it asks for your password), asks where your game files are, and adds **C&C Generals Zero Hour** to the Games menu and the desktop.
+The installer downloads the game, installs a few system libraries (it asks for your password), copies your game files, and adds **C&C Generals Zero Hour** to the Games menu and the desktop. Plug in the USB stick with your game files first (see below) and the installer finds them by itself; otherwise it opens a window to choose the folders.
 
 You can also download `GeneralsXZH-pi5-aarch64.tar.gz` from the [releases page](https://github.com/captainchapster/GeneralsX_RPI5/releases), unpack it, and run `./install-pi5-zh.sh` from the `GeneralsXZH-pi5` folder.
 
@@ -31,7 +31,7 @@ Zero Hour needs both games' folders. Copy them from a Windows PC with the game i
 | EA app | `C:\Program Files\EA Games\Command and Conquer Generals Zero Hour\Command and Conquer Generals Zero Hour` | `C:\Program Files\EA Games\Command and Conquer Generals Zero Hour\Command and Conquer Generals` |
 | Steam and others | see [Getting the Game Files](https://github.com/fbraz3/GeneralsX/wiki/Getting-the-Game-Files) | |
 
-Copy each whole folder. Then give the installer their location on the Pi when it asks, or pass them in:
+Copy each whole folder. The installer looks for them on USB sticks and other drives and in your home folder. If it can't find them it asks you to choose each folder, or you can pass them in:
 
 ```bash
 ~/GeneralsX/pi5/install-pi5-zh.sh --zh-data "/media/$USER/USB/Command and Conquer Generals Zero Hour" \
