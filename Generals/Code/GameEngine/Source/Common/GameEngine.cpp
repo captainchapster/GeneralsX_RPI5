@@ -855,12 +855,20 @@ void GameEngine::update()
 
 			/// @todo Move audio init, update, etc, into GameClient update
 
-			TheAudio->UPDATE();
-			TheGameClient->UPDATE();
+			// GeneralsX @feature Claude 12/10/2026 Time the audio, client and network updates for the GENERALSX_FPS_LOG frame breakdown.
+			{
+				FrameTime::Scope audioTime(FrameTime::PART_AUDIO);
+				TheAudio->UPDATE();
+			}
+			{
+				FrameTime::Scope clientTime(FrameTime::PART_CLIENT);
+				TheGameClient->UPDATE();
+			}
 			TheMessageStream->propagateMessages();
 
 			if (TheNetwork != nullptr)
 			{
+				FrameTime::Scope networkTime(FrameTime::PART_NETWORK);
 				TheNetwork->UPDATE();
 			}
 		}	// end VERIFY_CRC block

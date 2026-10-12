@@ -18,8 +18,8 @@
 
 // GeneralsX @feature Claude 12/10/2026 Frame time breakdown for the GENERALSX_FPS_LOG console log.
 // The main loop adds the time it spends in a few parts of each frame here, and the FPS log in
-// W3DDisplay.cpp takes the totals once per frame. Whatever is left of the frame (input, audio,
-// network and the client update) is what the log calls "other".
+// W3DDisplay.cpp takes the totals once per frame. Whatever is left of the frame (window events,
+// the radar, message dispatch) is what the log calls "other".
 
 #pragma once
 
@@ -28,9 +28,12 @@ namespace FrameTime
 	enum Part
 	{
 		PART_LOGIC,		// GameLogic update (the simulation)
+		PART_CLIENT,	// GameClient update, including PART_DRAW
 		PART_DRAW,		// W3DDisplay::draw, including PART_PRESENT
 		PART_PRESENT,	// end of scene: pillarbox blit and Present, where the CPU waits for the GPU
 		PART_PACING,	// frame rate cap sleep
+		PART_AUDIO,		// audio update
+		PART_NETWORK,	// network and online services update
 		PART_COUNT
 	};
 

@@ -1029,18 +1029,27 @@ void GameEngine::update()
 
 			/// @todo Move audio init, update, etc, into GameClient update
 
-			TheAudio->UPDATE();
-			TheGameClient->UPDATE();
+			// GeneralsX @feature Claude 12/10/2026 Time the audio, client and network updates for the GENERALSX_FPS_LOG frame breakdown.
+			{
+				FrameTime::Scope audioTime(FrameTime::PART_AUDIO);
+				TheAudio->UPDATE();
+			}
+			{
+				FrameTime::Scope clientTime(FrameTime::PART_CLIENT);
+				TheGameClient->UPDATE();
+			}
 			TheMessageStream->propagateMessages();
 
 			if (TheNetwork != nullptr)
 			{
+				FrameTime::Scope networkTime(FrameTime::PART_NETWORK);
 				TheNetwork->UPDATE();
 			}
 
 #ifdef SAGE_USE_NGMP
 			if (!TheGlobalData->m_headless)
 			{
+				FrameTime::Scope onlineTime(FrameTime::PART_NETWORK);
 				NGMP_OnlineServicesManager::getInstance().update();
 			}
 #endif

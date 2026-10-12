@@ -1327,17 +1327,23 @@ namespace
 	struct FrameParts
 	{
 		Real logic = 0.0f;		// simulation
+		Real client = 0.0f;		// client update without drawing: drawables, particles, UI
 		Real draw = 0.0f;		// building the frame on the CPU (W3DDisplay::draw without present)
 		Real present = 0.0f;	// end of scene and Present: waiting for the GPU
+		Real audio = 0.0f;
+		Real network = 0.0f;
 		Real pacing = 0.0f;		// frame rate cap
-		Real other = 0.0f;		// the rest: input, audio, network, client update
+		Real other = 0.0f;		// the rest: window events, radar, message dispatch
 		Real drawCalls = 0.0f;
 
 		void add(const FrameParts &parts)
 		{
 			logic += parts.logic;
+			client += parts.client;
 			draw += parts.draw;
 			present += parts.present;
+			audio += parts.audio;
+			network += parts.network;
 			pacing += parts.pacing;
 			other += parts.other;
 			drawCalls += parts.drawCalls;
@@ -1348,9 +1354,10 @@ namespace
 		{
 			if (frames <= 0.0f)
 				return;
-			fprintf(stderr, "[FPS]   %s: logic %.1f ms, draw %.1f ms, present %.1f ms, fps cap %.1f ms, other %.1f ms, %.0f draw calls\n",
-				label, logic * 1000.0f / frames, draw * 1000.0f / frames, present * 1000.0f / frames,
-				pacing * 1000.0f / frames, other * 1000.0f / frames, drawCalls / frames);
+			const Real ms = 1000.0f / frames;
+			fprintf(stderr, "[FPS]   %s: logic %.1f ms, client %.1f ms, draw %.1f ms, present %.1f ms, audio %.1f ms, network %.1f ms, fps cap %.1f ms, other %.1f ms, %.0f draw calls\n",
+				label, logic * ms, client * ms, draw * ms, present * ms, audio * ms, network * ms, pacing * ms, other * ms,
+				drawCalls / frames);
 		}
 	};
 
@@ -1360,11 +1367,18 @@ namespace
 		FrameParts parts;
 		parts.logic = (Real)FrameTime::Take(FrameTime::PART_LOGIC);
 		parts.present = (Real)FrameTime::Take(FrameTime::PART_PRESENT);
-		parts.draw = (Real)FrameTime::Take(FrameTime::PART_DRAW) - parts.present;
+		const Real drawTotal = (Real)FrameTime::Take(FrameTime::PART_DRAW);
+		parts.draw = drawTotal - parts.present;
+		parts.client = (Real)FrameTime::Take(FrameTime::PART_CLIENT) - drawTotal;
+		parts.audio = (Real)FrameTime::Take(FrameTime::PART_AUDIO);
+		parts.network = (Real)FrameTime::Take(FrameTime::PART_NETWORK);
 		parts.pacing = (Real)FrameTime::Take(FrameTime::PART_PACING);
 		if (parts.draw < 0.0f)
 			parts.draw = 0.0f;
-		parts.other = elapsedSeconds - parts.logic - parts.draw - parts.present - parts.pacing;
+		if (parts.client < 0.0f)
+			parts.client = 0.0f;
+		parts.other = elapsedSeconds - parts.logic - parts.client - parts.draw - parts.present - parts.audio
+			- parts.network - parts.pacing;
 		if (parts.other < 0.0f)
 			parts.other = 0.0f;
 		parts.drawCalls = (Real)DX8Wrapper::Get_Last_Frame_Statistics().draw_calls;
