@@ -36,6 +36,8 @@ set(WWLIB_SRC
     Except.h
     FastAllocator.cpp
     FastAllocator.h
+    frametime.cpp
+    frametime.h
     ffactory.cpp
     ffactory.h
     gcd_lcm.cpp

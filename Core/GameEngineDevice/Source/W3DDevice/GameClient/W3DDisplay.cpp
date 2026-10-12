@@ -92,6 +92,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WWMath/wwmath.h"
 #include "WWLib/registry.h"
+#include "WWLib/frametime.h"
 #include "WW3D2/ww3d.h"
 #include "WW3D2/predlod.h"
 #include "WW3D2/part_emt.h"
@@ -1316,9 +1317,59 @@ const UnsignedInt START_CUMU_FRAME = LOGICFRAMES_PER_SECOND / 2;	// skip first h
 // With GENERALSX_FPS_LOG=<seconds> set, the console log gets a line with the average and worst frame
 // rate every <seconds>, and a summary (average, 1% low, worst frame) when a match ends. This gives
 // real numbers from play sessions without a debug build or an overlay.
+// Each line also splits the frame time into its parts (see WWLib/frametime.h), for the average frame
+// and for the worst one, and gives the draw calls per frame, so it shows where the time goes.
 namespace
 {
 	enum { FPS_LOG_BUCKETS = 1000 };	// frame time histogram in 1 ms steps; longer frames go in the last one
+
+	// Where a frame's time went, in seconds.
+	struct FrameParts
+	{
+		Real logic = 0.0f;		// simulation
+		Real draw = 0.0f;		// building the frame on the CPU (W3DDisplay::draw without present)
+		Real present = 0.0f;	// end of scene and Present: waiting for the GPU
+		Real pacing = 0.0f;		// frame rate cap
+		Real other = 0.0f;		// the rest: input, audio, network, client update
+		Real drawCalls = 0.0f;
+
+		void add(const FrameParts &parts)
+		{
+			logic += parts.logic;
+			draw += parts.draw;
+			present += parts.present;
+			pacing += parts.pacing;
+			other += parts.other;
+			drawCalls += parts.drawCalls;
+		}
+
+		// Prints the parts divided by frames, as milliseconds per frame.
+		void print(const char *label, Real frames) const
+		{
+			if (frames <= 0.0f)
+				return;
+			fprintf(stderr, "[FPS]   %s: logic %.1f ms, draw %.1f ms, present %.1f ms, fps cap %.1f ms, other %.1f ms, %.0f draw calls\n",
+				label, logic * 1000.0f / frames, draw * 1000.0f / frames, present * 1000.0f / frames,
+				pacing * 1000.0f / frames, other * 1000.0f / frames, drawCalls / frames);
+		}
+	};
+
+	// Takes the time the main loop recorded since the last frame.
+	FrameParts takeFrameParts(Real elapsedSeconds)
+	{
+		FrameParts parts;
+		parts.logic = (Real)FrameTime::Take(FrameTime::PART_LOGIC);
+		parts.present = (Real)FrameTime::Take(FrameTime::PART_PRESENT);
+		parts.draw = (Real)FrameTime::Take(FrameTime::PART_DRAW) - parts.present;
+		parts.pacing = (Real)FrameTime::Take(FrameTime::PART_PACING);
+		if (parts.draw < 0.0f)
+			parts.draw = 0.0f;
+		parts.other = elapsedSeconds - parts.logic - parts.draw - parts.present - parts.pacing;
+		if (parts.other < 0.0f)
+			parts.other = 0.0f;
+		parts.drawCalls = (Real)DX8Wrapper::Get_Last_Frame_Statistics().draw_calls;
+		return parts;
+	}
 
 	struct FpsLog
 	{
@@ -1327,12 +1378,15 @@ namespace
 		Real intervalTime = 0.0f;
 		Int intervalFrames = 0;
 		Real intervalWorstFrame = 0.0f;
+		FrameParts intervalParts;
+		FrameParts intervalWorstParts;
 		// current match
 		Bool inMatch = false;
 		const char *matchKind = "";
 		Real matchTime = 0.0f;
 		Int matchFrames = 0;
 		Real matchWorstFrame = 0.0f;
+		FrameParts matchParts;
 		UnsignedInt matchHistogram[FPS_LOG_BUCKETS] = {0};
 	};
 
@@ -1370,12 +1424,14 @@ namespace
 			fprintf(stderr, "[FPS] match summary (%s, %s): %.0f s, %d frames, average %.1f FPS, 1%% low %.1f FPS, worst frame %.0f ms\n",
 				log.matchKind, TheGlobalData->m_mapName.str(), log.matchTime, log.matchFrames,
 				(Real)log.matchFrames / log.matchTime, onePercentLow, log.matchWorstFrame * 1000.0f);
+			log.matchParts.print("average frame", (Real)log.matchFrames);
 			fflush(stderr);
 		}
 		log.inMatch = false;
 		log.matchTime = 0.0f;
 		log.matchFrames = 0;
 		log.matchWorstFrame = 0.0f;
+		log.matchParts = FrameParts();
 		memset(log.matchHistogram, 0, sizeof(log.matchHistogram));
 	}
 
@@ -1391,6 +1447,8 @@ namespace
 		}
 		if (log.intervalSecs == 0)
 			return;
+
+		const FrameParts parts = takeFrameParts(elapsedSeconds);
 
 		// Skip the first call and long stalls (loading screens), which are not rendered frames.
 		if (elapsedSeconds <= 0.0f || elapsedSeconds > 2.0f)
@@ -1412,6 +1470,7 @@ namespace
 			log.matchFrames++;
 			if (elapsedSeconds > log.matchWorstFrame)
 				log.matchWorstFrame = elapsedSeconds;
+			log.matchParts.add(parts);
 			Int bucket = (Int)(elapsedSeconds * 1000.0f);
 			if (bucket >= FPS_LOG_BUCKETS)
 				bucket = FPS_LOG_BUCKETS - 1;
@@ -1420,17 +1479,25 @@ namespace
 
 		log.intervalTime += elapsedSeconds;
 		log.intervalFrames++;
+		log.intervalParts.add(parts);
 		if (elapsedSeconds > log.intervalWorstFrame)
+		{
 			log.intervalWorstFrame = elapsedSeconds;
+			log.intervalWorstParts = parts;
+		}
 		if (log.intervalTime >= (Real)log.intervalSecs)
 		{
 			fprintf(stderr, "[FPS] %s: average %.1f FPS, worst frame %.0f ms (%d frames in %.1f s)\n",
 				log.inMatch ? log.matchKind : "menu", (Real)log.intervalFrames / log.intervalTime,
 				log.intervalWorstFrame * 1000.0f, log.intervalFrames, log.intervalTime);
+			log.intervalParts.print("average frame", (Real)log.intervalFrames);
+			log.intervalWorstParts.print("worst frame", 1.0f);
 			fflush(stderr);
 			log.intervalTime = 0.0f;
 			log.intervalFrames = 0;
 			log.intervalWorstFrame = 0.0f;
+			log.intervalParts = FrameParts();
+			log.intervalWorstParts = FrameParts();
 		}
 	}
 }
@@ -2273,6 +2340,9 @@ void W3DDisplay::step()
 void W3DDisplay::draw()
 {
 	//USE_PERF_TIMER(W3DDisplay_draw)
+
+	// GeneralsX @feature Claude 12/10/2026 Time the frame build for the GENERALSX_FPS_LOG frame breakdown.
+	FrameTime::Scope drawTime(FrameTime::PART_DRAW);
 
 	// GeneralsX @feature xxorza 15/04/2026 Process deferred window resize for pillarbox
 	DX8Wrapper::Pillarbox_Process_Resize();

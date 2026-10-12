@@ -18,6 +18,7 @@
 #include "PreRTS.h"
 
 #include "Common/FramePacer.h"
+#include "WWLib/frametime.h"
 
 #include "GameClient/View.h"
 
@@ -62,7 +63,11 @@ void FramePacer::update()
 {
 	// Uses a high resolution counter to cap the frame rate more accurately to the desired limit than retail did.
 	const UnsignedInt maxFps = getActualFramesPerSecondLimit();
-	m_updateTime = m_frameRateLimit.wait(maxFps);
+	{
+		// GeneralsX @feature Claude 12/10/2026 Time the frame rate cap for the GENERALSX_FPS_LOG frame breakdown.
+		FrameTime::Scope pacingTime(FrameTime::PART_PACING);
+		m_updateTime = m_frameRateLimit.wait(maxFps);
+	}
 
 	if (TheGameLogic != nullptr)
 	{

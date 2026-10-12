@@ -111,6 +111,7 @@
 #include "GameNetwork/GameSpy/GameResultsThread.h"
 
 #include "Common/version.h"
+#include "WWLib/frametime.h"
 
 
 //-------------------------------------------------------------------------------------------------
@@ -1048,7 +1049,11 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
-			TheGameLogic->UPDATE();
+			{
+				// GeneralsX @feature Claude 12/10/2026 Time the simulation for the GENERALSX_FPS_LOG frame breakdown.
+				FrameTime::Scope logicTime(FrameTime::PART_LOGIC);
+				TheGameLogic->UPDATE();
+			}
 
 			if (!TheFramePacer->isTimeFrozen())
 			{
