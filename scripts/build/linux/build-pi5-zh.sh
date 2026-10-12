@@ -56,6 +56,18 @@ if [[ -z "${have_cmake}" ]] || [[ "$(printf '%s\n%s\n' "${need_cmake}" "${have_c
 fi
 cmake --version | head -1
 
+# The DXVK build runs "meson setup --reconfigure" on a fresh build directory, which Meson 1.0
+# (bookworm) rejects with "Directory does not contain a valid build tree".
+need_meson="1.4"
+have_meson="$(meson --version 2>/dev/null || true)"
+if [[ -z "${have_meson}" ]] || [[ "$(printf '%s\n%s\n' "${need_meson}" "${have_meson}" | sort -V | head -1)" != "${need_meson}" ]]; then
+  echo "== Meson ${have_meson:-missing} is older than ${need_meson}; installing a newer one into ~/.local/zh-venv"
+  python3 -m venv "${HOME}/.local/zh-venv"
+  "${HOME}/.local/zh-venv/bin/pip" install --upgrade "meson>=${need_meson}"
+  export PATH="${HOME}/.local/zh-venv/bin:${PATH}"
+fi
+meson --version
+
 # vcpkg has no prebuilt tool binaries for aarch64 Linux; use the system ones.
 export VCPKG_FORCE_SYSTEM_BINARIES=1
 if [[ -z "${VCPKG_ROOT:-}" ]]; then
