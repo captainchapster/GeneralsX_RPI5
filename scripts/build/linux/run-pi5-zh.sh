@@ -153,14 +153,30 @@ start_cpu_monitor() {
   [[ "${GENERALSX_FPS_LOG}" =~ ^[0-9]+$ && "${GENERALSX_FPS_LOG}" -gt 0 ]] || return 0
   [[ -r /sys/class/thermal/thermal_zone0/temp ]] || return 0
   (
+    # /proc/stat "cpu" line: busy = all fields but idle and iowait.
+    read_cpu_ticks() { awk '/^cpu /{print $2+$3+$4+$7+$8+$9, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat; }
+    read -r prev_busy prev_total < <(read_cpu_ticks)
     while sleep "${GENERALSX_FPS_LOG}"; do
       temp="$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)"
       clock="$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq 2>/dev/null || echo 0)"
-      throttled=""
+      extra=""
       if command -v vcgencmd >/dev/null 2>&1; then
-        throttled=", $(vcgencmd get_throttled 2>/dev/null || true)"
+        gpu_hz="$(vcgencmd measure_clock v3d 2>/dev/null | sed -n 's/.*=//p')"
+        [[ -n "${gpu_hz}" ]] && extra+=", GPU clock $((gpu_hz / 1000000)) MHz"
+        extra+=", $(vcgencmd get_throttled 2>/dev/null || true)"
       fi
-      echo "[CPU] temperature $((temp / 1000)) C, clock $((clock / 1000)) MHz${throttled}"
+      # Whole-system CPU use, and the busiest process other than the game (from a 1 s top sample),
+      # to spot background work competing with the game for the CPU.
+      read -r busy total < <(read_cpu_ticks)
+      if (( total > prev_total )); then
+        extra+=", all cores $(( (busy - prev_busy) * 100 / (total - prev_total) ))% busy"
+      fi
+      prev_busy="${busy}"; prev_total="${total}"
+      if command -v top >/dev/null 2>&1; then
+        other="$(top -b -n 2 -d 1 -w 200 2>/dev/null | awk '/^top -/{n++} n==2 && $1 ~ /^[0-9]+$/ && $12 != "GeneralsXZH" && $12 != "top" {print $12 " " $9 "%"; exit}')"
+        [[ -n "${other}" ]] && extra+=", busiest other process ${other}"
+      fi
+      echo "[CPU] temperature $((temp / 1000)) C, clock $((clock / 1000)) MHz${extra}"
     done
   ) &
   MONITOR_PID=$!

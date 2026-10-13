@@ -1385,10 +1385,23 @@ namespace
 		return parts;
 	}
 
+	// CPU time used by the calling (main) thread, or a negative value where it is not available.
+	// Comparing it with the wall time shows whether slow frames are busy or waiting (e.g. on DXVK).
+	double fpsLogThreadCpuSeconds()
+	{
+#ifdef CLOCK_THREAD_CPUTIME_ID
+		timespec ts;
+		if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0)
+			return (double)ts.tv_sec + (double)ts.tv_nsec * 1.0e-9;
+#endif
+		return -1.0;
+	}
+
 	struct FpsLog
 	{
 		Int intervalSecs = -1;	// -1 = not read yet, 0 = off
 		// current interval
+		double intervalCpuStart = -1.0;
 		Real intervalTime = 0.0f;
 		Int intervalFrames = 0;
 		Real intervalWorstFrame = 0.0f;
@@ -1506,6 +1519,26 @@ namespace
 				log.intervalWorstFrame * 1000.0f, log.intervalFrames, log.intervalTime);
 			log.intervalParts.print("average frame", (Real)log.intervalFrames);
 			log.intervalWorstParts.print("worst frame", 1.0f);
+			// GeneralsX @performance Claude 13/10/2026 Busy share of the main thread, particle count and
+			// detail levels, to tell what changes when the frame rate steps up or down mid-game.
+			const double cpuNow = fpsLogThreadCpuSeconds();
+			const Int busyPercent = (log.intervalCpuStart >= 0.0 && cpuNow >= 0.0)
+				? (Int)((cpuNow - log.intervalCpuStart) * 100.0 / log.intervalTime + 0.5) : -1;
+			log.intervalCpuStart = cpuNow;
+			const char *staticLod = "?";
+			const char *dynamicLod = "?";
+			if (TheGameLODManager)
+			{
+				const StaticGameLODLevel staticLevel = TheGameLODManager->getStaticLODLevel();
+				const DynamicGameLODLevel dynamicLevel = TheGameLODManager->getDynamicLODLevel();
+				if (staticLevel >= 0 && staticLevel < STATIC_GAME_LOD_COUNT)
+					staticLod = TheGameLODManager->getStaticGameLODLevelName(staticLevel);
+				if (dynamicLevel >= 0 && dynamicLevel < DYNAMIC_GAME_LOD_COUNT)
+					dynamicLod = TheGameLODManager->getDynamicGameLODLevelName(dynamicLevel);
+			}
+			fprintf(stderr, "[FPS]   main thread busy %d%%, %u particles, detail %s, dynamic detail %s\n",
+				busyPercent, TheParticleSystemManager ? TheParticleSystemManager->getParticleCount() : 0u,
+				staticLod, dynamicLod);
 			fflush(stderr);
 			log.intervalTime = 0.0f;
 			log.intervalFrames = 0;
