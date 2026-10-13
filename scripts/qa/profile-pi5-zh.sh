@@ -15,6 +15,10 @@
 # records the game's main thread for RECORD_SECONDS seconds (default 60). Call stacks are large, so keep
 # the window short.
 #
+# If writing the call graph report is interrupted, rebuild it from the recorded data without
+# playing again:
+#   ./scripts/qa/profile-pi5-zh.sh report
+#
 # Installs perf (the linux-perf package) when it is missing. Needs sudo.
 set -euo pipefail
 
@@ -36,6 +40,30 @@ if ! command -v perf >/dev/null 2>&1 || ! perf --version >/dev/null 2>&1; then
   sudo apt-get install -y linux-perf
 fi
 
+# Unwinding DWARF call stacks is slow on the Pi. --no-inline skips perf's per-address addr2line
+# lookups for inlined functions, which otherwise make the report take far longer than the recording.
+write_callgraph_report() {
+  echo "== Writing ${REPORT} (this can take a few minutes)"
+  {
+    echo "# Main thread: time spent inside each function, including everything it calls"
+    perf report -i "${DATA}" --stdio --no-inline --children --sort sym -g none --percent-limit 0.5 2>/dev/null | grep -v "^$"
+  } > "${REPORT}"
+  echo "== Writing ${FOLDED}"
+  perf report -i "${DATA}" --stdio --no-inline --no-children --sort sym -g folded,0,caller,function,count 2>/dev/null \
+    | grep -v "^#" | grep -v "^$" > "${FOLDED}" || true
+  echo "== Done: send ${REPORT} and ${FOLDED}"
+}
+
+if [[ "${MODE}" == "report" ]]; then
+  if [[ ! -f "${DATA}" ]]; then
+    echo "No recording at ${DATA}; run with callgraph first" >&2
+    exit 1
+  fi
+  sudo chown "$(id -u):$(id -g)" "${DATA}"
+  write_callgraph_report
+  exit 0
+fi
+
 echo "== Waiting for the game to start (start it now)"
 pid=""
 while [[ -z "${pid}" ]]; do
@@ -49,15 +77,8 @@ if [[ "${MODE}" == "callgraph" ]]; then
   # The main thread's id is the process id. Stacks are unwound from DWARF debug info (RelWithDebInfo).
   sudo perf record -F "${FREQUENCY}" -t "${pid}" --call-graph dwarf,16384 -o "${DATA}" -- sleep "${SECONDS_TO_RECORD}" 2>&1 \
     | grep -v "^\[ perf record: Woken up" || true
-  echo "== Writing ${REPORT} (this can take a few minutes)"
   sudo chown "$(id -u):$(id -g)" "${DATA}"
-  {
-    echo "# Main thread: time spent inside each function, including everything it calls"
-    perf report -i "${DATA}" --stdio --children --sort sym -g none --percent-limit 0.5 2>/dev/null | grep -v "^$"
-  } > "${REPORT}"
-  perf report -i "${DATA}" --stdio --no-children --sort sym -g folded,0,caller,function,count 2>/dev/null \
-    | grep -v "^#" | grep -v "^$" > "${FOLDED}" || true
-  echo "== Done: send ${REPORT} and ${FOLDED}"
+  write_callgraph_report
   exit 0
 fi
 
