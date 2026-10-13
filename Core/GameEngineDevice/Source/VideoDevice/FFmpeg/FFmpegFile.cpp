@@ -141,6 +141,13 @@ Bool FFmpegFile::open(File *file)
 		}
 	}
 
+	// GeneralsX @performance Claude 13/10/2026 The wav demuxer asks FFmpeg to probe 16-bit PCM
+	// streams for AC3/DTS hidden inside, running every demuxer's probe on up to 32 growing packet
+	// buffers. That was most of the main thread time spent starting sounds on the Raspberry Pi 5.
+	// The game's WAV files hold plain PCM or ADPCM, so stop that probe after the first packet.
+	if (formatHint != nullptr && m_fmtCtx->iformat == formatHint && strcmp(formatHint->name, "wav") == 0)
+		m_fmtCtx->probesize = 32;
+
 	int result = avformat_find_stream_info(m_fmtCtx, nullptr);
 	if (result < 0) {
 		char error_buffer[1024];
