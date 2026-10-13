@@ -156,6 +156,18 @@ start_cpu_monitor() {
     # /proc/stat "cpu" line: busy = all fields but idle and iowait.
     read_cpu_ticks() { awk '/^cpu /{print $2+$3+$4+$7+$8+$9, $2+$3+$4+$5+$6+$7+$8+$9}' /proc/stat; }
     read -r prev_busy prev_total < <(read_cpu_ticks)
+    # GPU busy time per V3D engine, from the game's DRM fdinfo (kernel 6.6+ prints lines such as
+    # "drm-engine-render: 123 ns"). Summed over the game's DRM file descriptors.
+    read_gpu_ns() {
+      local pid
+      pid="$(pgrep -x GeneralsXZH | head -1 || true)"
+      [[ -n "${pid}" ]] || return 0
+      cat /proc/"${pid}"/fdinfo/* 2>/dev/null \
+        | awk '/^drm-engine-[a-z_]+:/{name=$1; sub(/^drm-engine-/,"",name); sub(/:$/,"",name); ns[name]+=$2}
+               END{for (n in ns) print n, ns[n]}' | sort
+    }
+    declare -A prev_gpu=()
+    prev_gpu_time="$(date +%s%N)"
     while sleep "${GENERALSX_FPS_LOG}"; do
       temp="$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)"
       clock="$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq 2>/dev/null || echo 0)"
@@ -172,6 +184,17 @@ start_cpu_monitor() {
         extra+=", all cores $(( (busy - prev_busy) * 100 / (total - prev_total) ))% busy"
       fi
       prev_busy="${busy}"; prev_total="${total}"
+      now="$(date +%s%N)"
+      gpu=""
+      while read -r engine ns; do
+        [[ -n "${engine}" ]] || continue
+        if [[ -n "${prev_gpu[${engine}]:-}" ]] && (( now > prev_gpu_time && ns >= prev_gpu[${engine}] )); then
+          gpu+=" ${engine} $(( (ns - prev_gpu[${engine}]) * 100 / (now - prev_gpu_time) ))%"
+        fi
+        prev_gpu[${engine}]="${ns}"
+      done < <(read_gpu_ns)
+      prev_gpu_time="${now}"
+      [[ -n "${gpu}" ]] && extra+=", GPU busy:${gpu}"
       if command -v top >/dev/null 2>&1; then
         other="$(top -b -n 2 -d 1 -w 200 2>/dev/null | awk '/^top -/{n++} n==2 && $1 ~ /^[0-9]+$/ && $12 != "GeneralsXZH" && $12 != "top" {print $12 " " $9 "%"; exit}')"
         [[ -n "${other}" ]] && extra+=", busiest other process ${other}"
