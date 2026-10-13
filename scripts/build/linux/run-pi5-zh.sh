@@ -10,7 +10,8 @@
 #   - ./scripts/build/linux/deploy-linux-zh.sh linux-aarch64 has been run
 #   - Zero Hour data (*.big) in ~/GeneralsX/GeneralsZH, base Generals data in ~/GeneralsX/Generals
 #   - A Mesa 26+ V3DV driver in $MESA_PREFIX: the mesa/ folder next to this script when installed
-#     from the Pi package, otherwise /opt/mesa-current (see build-pi5-mesa.sh)
+#     from the Pi package, else the installed package's ~/GeneralsX/pi5/mesa, else /opt/mesa-current
+#     (see build-pi5-mesa.sh)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,9 +23,16 @@ if [[ -t 1 ]]; then
   exec > >(tee "${HOME}/GeneralsX/logs/zh-last-run.log") 2>&1
 fi
 
+# GeneralsX @performance Claude 13/10/2026 Prefer the Pi package's Mesa over /opt/mesa-current for
+# checkout builds too: a hand-built /opt Mesa measured 24 FPS in the main menu where the package's
+# Mesa (built with -mcpu=cortex-a76 by build-pi5-mesa.sh) gave 45 FPS with the same game build.
 if [[ -z "${MESA_PREFIX:-}" ]]; then
   MESA_PREFIX="/opt/mesa-current"
-  [[ -d "${SCRIPT_DIR}/mesa" ]] && MESA_PREFIX="${SCRIPT_DIR}/mesa"
+  if [[ -d "${SCRIPT_DIR}/mesa" ]]; then
+    MESA_PREFIX="${SCRIPT_DIR}/mesa"
+  elif [[ -d "${HOME}/GeneralsX/pi5/mesa" ]]; then
+    MESA_PREFIX="${HOME}/GeneralsX/pi5/mesa"
+  fi
 fi
 GAME_DIR="${GAME_DIR:-${HOME}/GeneralsX/GeneralsZH}"
 
