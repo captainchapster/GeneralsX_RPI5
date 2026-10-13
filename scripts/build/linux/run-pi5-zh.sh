@@ -213,7 +213,29 @@ stop_cpu_monitor() {
   MONITOR_PID=""
 }
 
+# DXVK_LOG_WAITS logs "Wait call stack" lines with GeneralsXZH+0xOFFSET frames. Turn the game's
+# frames into function names and source lines so the log alone shows which code waited.
+resolve_wait_call_stacks() {
+  local log="${HOME}/GeneralsX/logs/zh-last-run.log" bin="${GAME_DIR}/GeneralsXZH" base=0
+  [[ "${DXVK_LOG_WAITS}" == "1" && -f "${log}" && -f "${bin}" ]] || return 0
+  command -v addr2line >/dev/null 2>&1 || return 0
+  # A non-PIE binary is linked at its first load address; addr2line wants addresses, not offsets.
+  if readelf -h "${bin}" 2>/dev/null | grep -q 'Type:.*EXEC'; then
+    base="$(readelf -lW "${bin}" | awk '$1 == "LOAD" {print $3; exit}')"
+  fi
+  grep 'Wait call stack' "${log}" | while IFS= read -r line; do
+    local addrs=()
+    for off in $(grep -o 'GeneralsXZH+0x[0-9a-f]*' <<<"${line}" | cut -d+ -f2); do
+      addrs+=("$(printf '0x%x' $(( off + base - 1 )))")
+    done
+    [[ ${#addrs[@]} -gt 0 ]] || continue
+    echo "[WAITS] ${line#*Wait call stack }"
+    addr2line -f -C -p -e "${bin}" "${addrs[@]}" | sed 's/^/[WAITS]   /'
+  done
+}
+
 cleanup() {
+  resolve_wait_call_stacks || true
   stop_cpu_monitor
   restore_cpu_governor
   restore_desktop_icons
