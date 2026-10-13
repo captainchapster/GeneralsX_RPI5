@@ -67,6 +67,8 @@ struct PlayingAudio
 	ma_audio_buffer* m_queuedBuffer;
 	Bool m_nextLoopPrepared;
 	Bool m_queueFailed;
+	// GeneralsX @bugfix Claude 13/10/2026 Stopped by pauseAudio(); resumeAudio() starts it again.
+	Bool m_paused;
 
 	PlayingAudio() :
 		m_sound(NULL),
@@ -81,7 +83,8 @@ struct PlayingAudio
 		m_currentBuffer(NULL),
 		m_queuedBuffer(NULL),
 		m_nextLoopPrepared(false),
-		m_queueFailed(false)
+		m_queueFailed(false),
+		m_paused(false)
 	{ }
 };
 
@@ -238,6 +241,7 @@ protected:
 	void playAudioEvent(AudioRequest *req);
 	void stopAudioEvent(AudioHandle handle);
 	void pauseAudioEvent(AudioHandle handle);
+	static AudioAffect getAudioAffect(const PlayingAudio *playing);
 
 	PlayingAudio *allocatePlayingAudio(void);
 	void releaseMiniAudioHandles(PlayingAudio *release);

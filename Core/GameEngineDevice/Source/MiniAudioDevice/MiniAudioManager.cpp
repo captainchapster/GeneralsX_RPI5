@@ -259,18 +259,56 @@ void MiniAudioManager::stopAudio(AudioAffect which)
 }
 
 //-------------------------------------------------------------------------------------------------
+// The sound group a playing sound was started in (see playAudioEvent).
+AudioAffect MiniAudioManager::getAudioAffect(const PlayingAudio *playing)
+{
+	const AudioEventRTS *event = playing->m_audioEventRTS.Peek();
+	const AudioEventInfo *info = event ? event->getAudioEventInfo() : NULL;
+	if (!info) {
+		return AudioAffect_Sound;
+	}
+	switch (info->m_soundType)
+	{
+	case AT_Music:
+		return AudioAffect_Music;
+	case AT_Streaming:
+		return AudioAffect_Speech;
+	default:
+		return event->isPositionalAudio() ? AudioAffect_Sound3D : AudioAffect_Sound;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 13/10/2026 Pause the sounds that are playing, as Miles does, instead of
+// stopping the whole sound groups. The game pauses its sounds while the in-game menu is open, and the
+// menu's own sounds (opening, button hover and click) start after that. In a stopped group they were
+// silent and processPlayingList() reaped them at once. Like Miles, play requests that are still
+// queued are dropped, so they do not start while the game is paused.
 void MiniAudioManager::pauseAudio(AudioAffect which)
 {
 	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
 	ScopedFPUGuard fpuGuard;
-	if (BitIsSet(which, AudioAffect_Sound))
-		ma_sound_group_stop(&m_soundGroup);
-	if (BitIsSet(which, AudioAffect_Sound3D))
-		ma_sound_group_stop(&m_sound3DGroup);
-	if (BitIsSet(which, AudioAffect_Speech))
-		ma_sound_group_stop(&m_speechGroup);
-	if (BitIsSet(which, AudioAffect_Music))
-		ma_sound_group_stop(&m_musicGroup);
+	for (std::list<PlayingAudio *>::iterator it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		PlayingAudio *playing = *it;
+		if (!playing || !playing->m_sound || playing->m_paused || !BitIsSet(which, getAudioAffect(playing))) {
+			continue;
+		}
+		if (ma_sound_is_playing(playing->m_sound)) {
+			ma_sound_stop(playing->m_sound);
+			playing->m_paused = true;
+		}
+	}
+
+	for (std::list<AudioRequest *>::iterator ait = m_audioRequests.begin(); ait != m_audioRequests.end(); ) {
+		AudioRequest *req = *ait;
+		if (req && req->m_request == AR_Play) {
+			deleteInstance(req);
+			ait = m_audioRequests.erase(ait);
+		}
+		else {
+			++ait;
+		}
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -278,6 +316,7 @@ void MiniAudioManager::resumeAudio(AudioAffect which)
 {
 	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
 	ScopedFPUGuard fpuGuard;
+	// stopAudio() stops whole groups, so make sure the groups play again too.
 	if (BitIsSet(which, AudioAffect_Sound))
 		ma_sound_group_start(&m_soundGroup);
 	if (BitIsSet(which, AudioAffect_Sound3D))
@@ -286,6 +325,15 @@ void MiniAudioManager::resumeAudio(AudioAffect which)
 		ma_sound_group_start(&m_speechGroup);
 	if (BitIsSet(which, AudioAffect_Music))
 		ma_sound_group_start(&m_musicGroup);
+
+	for (std::list<PlayingAudio *>::iterator it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		PlayingAudio *playing = *it;
+		if (!playing || !playing->m_sound || !playing->m_paused || !BitIsSet(which, getAudioAffect(playing))) {
+			continue;
+		}
+		ma_sound_start(playing->m_sound);
+		playing->m_paused = false;
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1373,8 +1421,8 @@ void MiniAudioManager::processPlayingList(void)
 
 		advanceQueuedLoop(playing);
 
-		// Check if sound has finished playing
-		if (playing->m_sound && !ma_sound_is_playing(playing->m_sound)) {
+		// Check if sound has finished playing; paused sounds have not
+		if (playing->m_sound && !playing->m_paused && !ma_sound_is_playing(playing->m_sound)) {
 			// GeneralsX @bugfix rpi5 11/10/2026 Start the next loop of a looping sound effect, as
 			// the Miles completion callback and OpenAL's polling do. Without this, looping sounds
 			// such as the Particle Cannon beam stopped after their first pass.
