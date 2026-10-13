@@ -54,6 +54,9 @@ export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
 # Log the measured frame rate every 10 seconds, plus a summary after each match ("[FPS]" lines in
 # ~/GeneralsX/logs/zh-last-run.log). Set to 0 to turn it off.
 export GENERALSX_FPS_LOG="${GENERALSX_FPS_LOG:-10}"
+# Every 10 seconds, log where the game thread waited on the GPU or DXVK ("Main thread waits" lines),
+# to find what keeps the GPU from staying busy. Set to 0 to turn it off.
+export DXVK_LOG_WAITS="${DXVK_LOG_WAITS:-1}"
 # The V3DV driver is built for X11 only, so on a Wayland desktop run through XWayland.
 if [[ -n "${DISPLAY:-}" && -z "${SDL_VIDEO_DRIVER:-}" ]]; then
   export SDL_VIDEO_DRIVER=x11
