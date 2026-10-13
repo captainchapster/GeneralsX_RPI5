@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 01:05:06 +0000
+Subject: [PATCH] context: log render pass attachment shapes with
+ DXVK_LOG_RENDER_PASSES=1
+
+Tiling GPUs such as V3DV take a slow path (tile loads, clears drawn as
+quads) when the render area does not cover whole tiles of the attachments.
+Log each distinct combination of render area, attachment sizes, formats
+and load ops once, plus counts at 100/1000/10000/100000 uses.
+---
+ src/dxvk/dxvk_context.cpp | 48 +++++++++++++++++++++++++++++++++++++++
+ src/dxvk/dxvk_context.h   |  5 ++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/src/dxvk/dxvk_context.cpp b/src/dxvk/dxvk_context.cpp
+index 098d2e56..82a0df7d 100644
+--- a/src/dxvk/dxvk_context.cpp
++++ b/src/dxvk/dxvk_context.cpp
+@@ -1,5 +1,6 @@
+ #include <cstring>
+ #include <map>
++#include <unordered_map>
+ #include <vector>
+ #include <utility>
+ 
+@@ -5526,6 +5527,48 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkContext::logRenderPassShape(
++    const DxvkFramebufferInfo&  framebufferInfo,
++    const DxvkRenderPassOps&    ops,
++    const VkRect2D&             renderArea) {
++    // Tiling GPUs such as V3DV take a slow path when the render area does not cover
++    // whole tiles of every attachment, so record which attachment sizes are combined.
++    static const char* loadOpNames[] = { "load", "clear", "dontcare" };
++    auto loadOpName = [] (VkAttachmentLoadOp op) {
++      return uint32_t(op) < 3 ? loadOpNames[op] : "none";
++    };
++
++    std::string shape = str::format("area ", renderArea.extent.width, "x", renderArea.extent.height);
++
++    for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
++      const auto& colorTarget = framebufferInfo.getColorTarget(i);
++
++      if (colorTarget.view != nullptr) {
++        VkExtent3D extent = colorTarget.view->mipLevelExtent(0);
++        shape += str::format(", color", i, " ", extent.width, "x", extent.height,
++          " fmt ", uint32_t(colorTarget.view->info().format), " ", loadOpName(ops.colorOps[i].loadOp));
++      }
++    }
++
++    const auto& depthTarget = framebufferInfo.getDepthTarget();
++
++    if (depthTarget.view != nullptr) {
++      VkExtent3D extent = depthTarget.view->mipLevelExtent(0);
++      shape += str::format(", depth ", extent.width, "x", extent.height,
++        " fmt ", uint32_t(depthTarget.view->info().format), " ", loadOpName(ops.depthOps.loadOpD));
++    }
++
++    static dxvk::mutex s_mutex;
++    static std::unordered_map<std::string, uint64_t> s_counts;
++
++    std::lock_guard lock(s_mutex);
++    uint64_t count = ++s_counts[shape];
++
++    if (count == 1 || count == 100 || count == 1000 || count == 10000 || count == 100000)
++      Logger::info(str::format("Render pass #", count, ": ", shape));
++  }
++
++
+   void DxvkContext::renderPassBindFramebuffer(
+     const DxvkFramebufferInfo&  framebufferInfo,
+     const DxvkRenderPassOps&    ops) {
+@@ -5632,6 +5675,11 @@ namespace dxvk {
+       renderingInheritance.stencilAttachmentFormat = depthStencilFormat;
+     }
+ 
++    static const bool s_logRenderPasses = env::getEnvVar("DXVK_LOG_RENDER_PASSES") == "1";
++
++    if (unlikely(s_logRenderPasses))
++      logRenderPassShape(framebufferInfo, ops, renderingInfo.renderArea);
++
+     // On drivers that don't natively support secondary command buffers, only
+     // use them to enable MSAA resolve attachments. Also ignore color-only
+     // render passes here since we almost certainly need the output anyway.
+diff --git a/src/dxvk/dxvk_context.h b/src/dxvk/dxvk_context.h
+index 60630932..538a9774 100644
+--- a/src/dxvk/dxvk_context.h
++++ b/src/dxvk/dxvk_context.h
+@@ -1684,6 +1684,11 @@ namespace dxvk {
+       const DxvkFramebufferInfo&  framebufferInfo,
+       const DxvkRenderPassOps&    ops);
+ 
++    void logRenderPassShape(
++      const DxvkFramebufferInfo&  framebufferInfo,
++      const DxvkRenderPassOps&    ops,
++      const VkRect2D&             renderArea);
++
+     void renderPassBindFramebuffer(
+       const DxvkFramebufferInfo&  framebufferInfo,
+       const DxvkRenderPassOps&    ops);
+-- 
+2.43.0
+
