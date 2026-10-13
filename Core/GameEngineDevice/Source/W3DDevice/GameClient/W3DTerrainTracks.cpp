@@ -833,7 +833,11 @@ Try improving the fit to vertical surfaces like cliffs.
 	//check if there is anything to draw and fill vertex buffer
 	if (m_edgesToFlush >= 2)
 	{
-		DX8VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexBuffer);
+		// GeneralsX @performance Claude 13/10/2026 The tracks are rewritten from the start of this
+		// dynamic buffer every frame and only the rewritten part is drawn, so discard the old
+		// contents. Without D3DLOCK_DISCARD the lock waited for the GPU to finish the previous
+		// frame (about 13 ms per frame on the Raspberry Pi 5).
+		DX8VertexBufferClass::WriteLockClass lockVtxBuffer(m_vertexBuffer, D3DLOCK_DISCARD);
 		VertexFormatXYZDUV1 *verts = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
 		trackStartIndex=0;
 
