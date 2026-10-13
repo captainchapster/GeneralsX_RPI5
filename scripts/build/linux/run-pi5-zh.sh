@@ -164,7 +164,7 @@ start_cpu_monitor() {
       [[ -n "${pid}" ]] || return 0
       cat /proc/"${pid}"/fdinfo/* 2>/dev/null \
         | awk '/^drm-engine-[a-z_]+:/{name=$1; sub(/^drm-engine-/,"",name); sub(/:$/,"",name); ns[name]+=$2}
-               END{for (n in ns) print n, ns[n]}' | sort
+               END{for (n in ns) printf "%s %.0f\n", n, ns[n]}' | sort
     }
     declare -A prev_gpu=()
     prev_gpu_time="$(date +%s%N)"
