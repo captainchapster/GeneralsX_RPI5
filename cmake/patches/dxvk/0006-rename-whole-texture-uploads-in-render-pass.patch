@@ -1,0 +1,135 @@
+From 6bf2e0d06387e56f8a635987463b076dfcebb735 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 02:04:41 +0000
+Subject: [PATCH] context: rename whole-texture uploads instead of ending the
+ render pass
+
+On tiling GPUs, ending a render pass stores every tile of the render
+targets and the next pass loads them again. Uploading to a texture that
+was already used in the current command list had to end the render pass.
+When the upload replaces a whole single-level 2D texture, give the image
+new backing storage instead and do the upload in the init command buffer.
+Earlier draws keep the old storage. Only done when preferRenderPassOps is
+set. DXVK_LOG_RENDER_PASSES=1 also logs uploads that still end a pass.
+---
+ src/dxvk/dxvk_context.cpp | 66 ++++++++++++++++++++++++++++++++++++++-
+ src/dxvk/dxvk_context.h   | 12 +++++++
+ 2 files changed, 77 insertions(+), 1 deletion(-)
+
+diff --git a/src/dxvk/dxvk_context.cpp b/src/dxvk/dxvk_context.cpp
+index 7d1c85df..9ce51b37 100644
+--- a/src/dxvk/dxvk_context.cpp
++++ b/src/dxvk/dxvk_context.cpp
+@@ -3475,7 +3475,13 @@ namespace dxvk {
+     dstSubresource.aspectMask = dstFormatInfo->aspectMask;
+ 
+     if (!prepareOutOfOrderTransfer(buffer, bufferOffset, dataSize, DxvkAccess::Read)
+-     || !prepareOutOfOrderTransfer(image, DxvkAccess::Write)) {
++     || (!prepareOutOfOrderTransfer(image, DxvkAccess::Write)
++      && !discardImageForUploadInRp(image, imageSubresource, imageOffset, imageExtent))) {
++      static const bool s_logRenderPasses = env::getEnvVar("DXVK_LOG_RENDER_PASSES") == "1";
++
++      if (unlikely(s_logRenderPasses) && m_flags.test(DxvkContextFlag::GpRenderPassBound))
++        logRenderPassUpload(image, imageSubresource, imageExtent);
++
+       spillRenderPass(true);
+       prepareImage(image, vk::makeSubresourceRange(imageSubresource));
+ 
+@@ -5574,6 +5580,64 @@ namespace dxvk {
+   }
+ 
+ 
++  bool DxvkContext::discardImageForUploadInRp(
++    const Rc<DxvkImage>&        image,
++    const VkImageSubresourceLayers& subresource,
++          VkOffset3D            offset,
++          VkExtent3D            extent) {
++    // Uploading to a texture that was already used in this command list has to
++    // happen in order, which ends the render pass. On tiling GPUs that stores and
++    // reloads every tile of the render targets. If the upload replaces the whole
++    // image, give the image new backing storage instead, so that the upload can
++    // go to the init command buffer while earlier draws keep the old contents.
++    if (!m_flags.test(DxvkContextFlag::GpRenderPassBound)
++     || !m_device->perfHints().preferRenderPassOps)
++      return false;
++
++    const auto& info = image->info();
++
++    if ((info.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))
++     || info.mipLevels != 1 || info.numLayers != 1 || info.type != VK_IMAGE_TYPE_2D
++     || offset.x || offset.y || offset.z
++     || !image->isFullSubresource(subresource, extent)
++     || !image->canRelocate())
++      return false;
++
++    VkDeviceSize size = util::computeImageDataSize(info.format, info.extent);
++
++    if (size > MaxImageDiscardSizeInRp)
++      return false;
++
++    invalidateImage(image, image->allocateStorage());
++    return true;
++  }
++
++
++  void DxvkContext::logRenderPassUpload(
++    const Rc<DxvkImage>&        image,
++    const VkImageSubresourceLayers& subresource,
++          VkExtent3D            extent) {
++    // Describe texture uploads that still end a render pass, so that the
++    // remaining cases can be handled.
++    const auto& info = image->info();
++
++    std::string shape = str::format("upload ", extent.width, "x", extent.height,
++      " to mip ", subresource.mipLevel, " of ", info.extent.width, "x", info.extent.height,
++      ", ", info.mipLevels, " mips, ", info.numLayers, " layers, fmt ", uint32_t(info.format),
++      ", usage 0x", std::hex, uint32_t(info.usage), std::dec,
++      image->canRelocate() ? "" : ", fixed storage");
++
++    static dxvk::mutex s_mutex;
++    static std::unordered_map<std::string, uint64_t> s_counts;
++
++    std::lock_guard lock(s_mutex);
++    uint64_t count = ++s_counts[shape];
++
++    if (count == 1 || count == 100 || count == 1000 || count == 10000 || count == 100000)
++      Logger::info(str::format("Render pass upload #", count, ": ", shape));
++  }
++
++
+   void DxvkContext::logRenderPassSpill(
+           const char*                 caller,
+           uint32_t                    line) {
+diff --git a/src/dxvk/dxvk_context.h b/src/dxvk/dxvk_context.h
+index c0205247..e4aecb40 100644
+--- a/src/dxvk/dxvk_context.h
++++ b/src/dxvk/dxvk_context.h
+@@ -33,6 +33,7 @@ namespace dxvk {
+   class DxvkContext : public RcObject {
+     constexpr static VkDeviceSize MaxDiscardSizeInRp = 256u << 10u;
+     constexpr static VkDeviceSize MaxDiscardSize     =  16u << 10u;
++    constexpr static VkDeviceSize MaxImageDiscardSizeInRp = 4u << 20u;
+ 
+     constexpr static uint32_t DirectMultiDrawBatchSize = 256u;
+   public:
+@@ -1678,6 +1679,17 @@ namespace dxvk {
+       const char*                 caller = __builtin_FUNCTION(),
+       uint32_t                    line = __builtin_LINE());
+ 
++    bool discardImageForUploadInRp(
++      const Rc<DxvkImage>&        image,
++      const VkImageSubresourceLayers& subresource,
++            VkOffset3D            offset,
++            VkExtent3D            extent);
++
++    void logRenderPassUpload(
++      const Rc<DxvkImage>&        image,
++      const VkImageSubresourceLayers& subresource,
++            VkExtent3D            extent);
++
+     void logRenderPassSpill(
+       const char*                 caller,
+       uint32_t                    line);
+-- 
+2.43.0
+

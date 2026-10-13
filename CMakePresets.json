@@ -215,6 +215,20 @@
             }
         },
         {
+            "name": "linux-aarch64",
+            "displayName": "Linux aarch64 (Raspberry Pi 5) DXVK/SDL3/MiniAudio Release",
+            "inherits": "linux64-deploy",
+            "generator": "Ninja",
+            "hidden": false,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "SAGE_DXVK_FROM_SOURCE": "ON",
+                "SAGE_CPU_FLAGS": "-mcpu=cortex-a76",
+                "SAGE_UPDATE_CHECK": "OFF",
+                "RTS_BUILD_OPTION_HD_TERRAIN_TILES": "OFF"
+            }
+        },
+        {
             "name": "linux64-openal",
             "displayName": "Linux 64-bit DXVK/SDL3/OpenAL Release (Legacy)",
             "inherits": "default-vcpkg",
@@ -409,6 +423,12 @@
             "configurePreset": "linux64-deploy",
             "displayName": "Build Linux 64-bit DXVK/SDL3/MiniAudio Release",
             "description": "Build Linux 64-bit with DXVK graphics, SDL3 windowing, and MiniAudio audio (recommended)"
+        },
+        {
+            "name": "linux-aarch64",
+            "configurePreset": "linux-aarch64",
+            "displayName": "Build Linux aarch64 (Raspberry Pi 5) Release",
+            "description": "Build for 64-bit ARM Linux with DXVK built from source (Raspberry Pi 5)"
         },
         {
             "name": "linux64-openal",

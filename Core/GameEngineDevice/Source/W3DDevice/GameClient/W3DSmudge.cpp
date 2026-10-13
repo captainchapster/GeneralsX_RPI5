@@ -45,6 +45,11 @@
 SmudgeManager *TheSmudgeManager=nullptr;
 
 W3DSmudgeManager::W3DSmudgeManager()
+	: m_backgroundTexture(nullptr)
+	, m_indexBuffer(nullptr)
+	, m_backBufferWidth(0)
+	, m_backBufferHeight(0)
+	, m_backgroundFormat(WW3D_FORMAT_UNKNOWN)
 {
 }
 
@@ -86,10 +91,7 @@ void W3DSmudgeManager::ReAcquireResources()
 	surface->Get_Description(surface_desc);
 	REF_PTR_RELEASE(surface);
 
-	m_backgroundTexture = MSGNEW("TextureClass") TextureClass(surface_desc.Width,surface_desc.Height,surface_desc.Format,MIP_LEVELS_1,TextureClass::POOL_DEFAULT, true);
-
-	m_backBufferWidth = surface_desc.Width;
-	m_backBufferHeight = surface_desc.Height;
+	createBackgroundTexture(surface_desc.Width,surface_desc.Height,surface_desc.Format);
 
 	m_indexBuffer=NEW_REF(DX8IndexBufferClass,(SMUDGE_DRAW_SIZE*4*3));	//allocate 4 triangles per smudge, each with 3 indices.
 
@@ -127,6 +129,17 @@ void W3DSmudgeManager::ReAcquireResources()
 			ib+=12;
 		}
 	}
+}
+
+void W3DSmudgeManager::createBackgroundTexture(UnsignedInt width, UnsignedInt height, WW3DFormat format)
+{
+	REF_PTR_RELEASE(m_backgroundTexture);
+
+	m_backgroundTexture = MSGNEW("TextureClass") TextureClass(width,height,format,MIP_LEVELS_1,TextureClass::POOL_DEFAULT, true);
+
+	m_backBufferWidth = width;
+	m_backBufferHeight = height;
+	m_backgroundFormat = format;
 }
 
 /*Copies a portion of the current render target into a specified buffer*/
@@ -323,21 +336,36 @@ void W3DSmudgeManager::render(RenderInfoClass &rinfo)
 		return;
 	}
 
-	SurfaceClass *backBuffer = DX8Wrapper::_Get_DX8_Back_Buffer();
+	// GeneralsX @bugfix Claude 12/10/2026 Copy the scene from the active render target, not the backbuffer.
+	// When the game resolution differs from the window (pillarbox), the scene is drawn into an offscreen
+	// target at the game resolution while the backbuffer still holds the previously presented frame, so
+	// the Microwave Tank's heat haze showed black boxes and stale pixels. The background texture follows
+	// the render target's size and format, since CopyRects needs both to match.
+	IDirect3DSurface8 *renderTargetSurface = nullptr;
+	DX8Wrapper::_Get_D3D_Device8()->GetRenderTarget(&renderTargetSurface);
 
-	if (!backBuffer)
+	if (!renderTargetSurface)
 		return;
+
+	SurfaceClass *renderTarget = NEW_REF(SurfaceClass,(renderTargetSurface));
+	renderTargetSurface->Release();
+
+	SurfaceClass::SurfaceDescription surface_desc;
+	renderTarget->Get_Description(surface_desc);
+
+	if (!m_backgroundTexture || (Int)surface_desc.Width != m_backBufferWidth || (Int)surface_desc.Height != m_backBufferHeight
+		|| surface_desc.Format != m_backgroundFormat)
+	{
+		createBackgroundTexture(surface_desc.Width,surface_desc.Height,surface_desc.Format);
+	}
 
 	SurfaceClass *background=m_backgroundTexture ? m_backgroundTexture->Get_Surface_Level() : nullptr;
 
 	if (!background)
 	{
-		REF_PTR_RELEASE(backBuffer);
+		REF_PTR_RELEASE(renderTarget);
 		return;
 	}
-
-	SurfaceClass::SurfaceDescription surface_desc;
-	backBuffer->Get_Description(surface_desc);
 
 	CameraClass &camera=rinfo.Camera;
 	Vector3 vsVert;
@@ -435,15 +463,15 @@ void W3DSmudgeManager::render(RenderInfoClass &rinfo)
 	if (!count)
 	{
 		REF_PTR_RELEASE(background);
-		REF_PTR_RELEASE(backBuffer);
+		REF_PTR_RELEASE(renderTarget);
 		return;	//nothing to render.
 	}
 
 	//Copy the area of backbuffer occupied by smudges into an alternate buffer.
-	background->Copy(0,0,0,0,surface_desc.Width,surface_desc.Height,backBuffer);
+	background->Copy(0,0,0,0,surface_desc.Width,surface_desc.Height,renderTarget);
 
 	REF_PTR_RELEASE(background);
-	REF_PTR_RELEASE(backBuffer);
+	REF_PTR_RELEASE(renderTarget);
 
 	Matrix4x4 identity(true);
 	DX8Wrapper::Set_Transform(D3DTS_WORLD,identity);

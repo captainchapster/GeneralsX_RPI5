@@ -6,3 +6,4 @@ Type=Application
 Categories=Game;StrategyGame;
 StartupNotify=true
 Terminal=false
+StartupWMClass=com.fbraz3.GeneralsXZH

@@ -1,0 +1,290 @@
+From a64d174e929952eb1af9e804c8f121f15cb7b648 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 09:50:38 +0000
+Subject: [PATCH] d3d9: log where the application thread waits with
+ DXVK_LOG_WAITS=1
+
+On a tiling GPU every wait for a locked resource or the CS thread can leave
+the GPU idle, so sum the time spent in resource lock waits, CS thread syncs
+and the frame latency wait per call site and log the top entries every 10 s.
+Buffer lock waits name the buffer (type, size, usage, FVF, pool, lock range),
+and the first wait of each kind logs the application call stack.
+---
+ src/d3d9/d3d9_device.cpp    | 155 +++++++++++++++++++++++++++++++++++-
+ src/d3d9/d3d9_device.h      |  21 ++++-
+ src/d3d9/d3d9_swapchain.cpp |  12 +++
+ 3 files changed, 183 insertions(+), 5 deletions(-)
+
+diff --git a/src/d3d9/d3d9_device.cpp b/src/d3d9/d3d9_device.cpp
+index 4313f6a4..f88b090b 100644
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -26,6 +26,14 @@
+ #include "d3d9_initializer.h"
+ 
+ #include <algorithm>
++#include <cstring>
++#include <sstream>
++#include <unordered_set>
++
++#if defined(__GLIBC__)
++#include <dlfcn.h>
++#include <execinfo.h>
++#endif
+ #include <cfloat>
+ #ifdef MSC_VER
+ #pragma fenv_access (on)
+@@ -4714,7 +4722,9 @@ namespace dxvk {
+   bool D3D9DeviceEx::WaitForResource(
+     const DxvkPagedResource&                Resource,
+           uint64_t                          SequenceNumber,
+-          DWORD                             MapFlags) {
++          DWORD                             MapFlags,
++          const char*                       Caller,
++          uint32_t                          Line) {
+     // Wait for the any pending D3D9 command to be executed
+     // on the CS thread so that we can determine whether the
+     // resource is currently in use or not.
+@@ -4738,10 +4748,18 @@ namespace dxvk {
+       else {
+         // Make sure pending commands using the resource get
+         // executed on the the GPU if we have to wait for it
++        const bool logWait = LogMainThreadWaitsEnabled();
++        const auto waitStart = logWait
++          ? dxvk::high_resolution_clock::now()
++          : dxvk::high_resolution_clock::time_point();
++
+         Flush();
+         SynchronizeCsThread(SequenceNumber);
+ 
+         m_dxvkDevice->waitForResource(Resource, access);
++
++        if (unlikely(logWait))
++          LogMainThreadWait("lock waits for GPU", Caller, Line, MapFlags, waitStart);
+       }
+     }
+ 
+@@ -5385,7 +5403,18 @@ namespace dxvk {
+ 
+       if (!skipWait) {
+         const Rc<DxvkBuffer> mappingBuffer = pResource->GetBuffer<D3D9_COMMON_BUFFER_TYPE_MAPPING>();
+-        if (!WaitForResource(*mappingBuffer, pResource->GetMappingBufferSequenceNumber(), Flags))
++
++        std::string waitCaller;
++
++        if (unlikely(LogMainThreadWaitsEnabled())) {
++          waitCaller = str::format(__func__, " ",
++            desc.Type == D3DRTYPE_VERTEXBUFFER ? "vertex" : "index", " buffer ", desc.Size,
++            " bytes, usage 0x", std::hex, desc.Usage, ", fvf 0x", desc.FVF, std::dec,
++            ", pool ", uint32_t(desc.Pool), ", lock ", offset, "+", size);
++        }
++
++        if (!WaitForResource(*mappingBuffer, pResource->GetMappingBufferSequenceNumber(), Flags,
++            waitCaller.empty() ? __func__ : waitCaller.c_str(), __LINE__))
+           return D3DERR_WASSTILLDRAWING;
+ 
+         pResource->SetNeedsReadback(false);
+@@ -5706,15 +5735,135 @@ namespace dxvk {
+   }
+ 
+ 
+-  void D3D9DeviceEx::SynchronizeCsThread(uint64_t SequenceNumber) {
++  void D3D9DeviceEx::SynchronizeCsThread(uint64_t SequenceNumber, const char* Caller, uint32_t Line) {
+     D3D9DeviceLock lock = LockDevice();
+ 
++    const bool logWait = LogMainThreadWaitsEnabled();
++    const auto waitStart = logWait
++      ? dxvk::high_resolution_clock::now()
++      : dxvk::high_resolution_clock::time_point();
++
+     // Dispatch current chunk so that all commands
+     // recorded prior to this function will be run
+     if (SequenceNumber > m_csSeqNum)
+       FlushCsChunk();
+ 
+     m_csThread.synchronize(SequenceNumber);
++
++    if (unlikely(logWait))
++      LogMainThreadWait("waits for CS thread", Caller, Line, 0, waitStart);
++  }
++
++
++  bool D3D9DeviceEx::LogMainThreadWaitsEnabled() {
++    static const bool s_enabled = env::getEnvVar("DXVK_LOG_WAITS") == "1";
++    return s_enabled;
++  }
++
++
++  namespace {
++
++    struct MainThreadWaitStats {
++      uint64_t count = 0;
++      uint64_t ns    = 0;
++    };
++
++    dxvk::mutex                                          g_waitMutex;
++    std::unordered_map<std::string, MainThreadWaitStats> g_waitStats;
++    dxvk::high_resolution_clock::time_point              g_waitReportTime;
++    uint64_t                                             g_waitFrames = 0;
++
++  }
++
++
++  void D3D9DeviceEx::LogMainThreadWait(
++          const char*             What,
++          const char*             Caller,
++          uint32_t                Line,
++          DWORD                   MapFlags,
++          dxvk::high_resolution_clock::time_point Start) {
++    // Record where the application thread blocks on the GPU or the CS thread,
++    // since every such wait can leave a tiling GPU idle while it refills.
++    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++      dxvk::high_resolution_clock::now() - Start).count();
++
++    std::string key = MapFlags
++      ? str::format(What, " (", Caller, ":", Line, ", lock flags 0x", std::hex, MapFlags, ")")
++      : str::format(What, " (", Caller, ":", Line, ")");
++
++    std::lock_guard lock(g_waitMutex);
++    auto& stats = g_waitStats[key];
++    stats.count += 1;
++    stats.ns    += uint64_t(ns);
++
++    // Log the application call stack once per distinct lock wait, so the
++    // game code that locks a buffer the GPU is still reading can be found.
++    static std::unordered_set<std::string> s_stackLogged;
++
++    if (std::strstr(What, "lock") && s_stackLogged.insert(key).second && s_stackLogged.size() <= 32)
++      LogWaitCallStack(key);
++  }
++
++
++  void D3D9DeviceEx::LogWaitCallStack(const std::string& Key) {
++#if defined(__GLIBC__)
++    std::array<void*, 16> frames;
++    int count = backtrace(frames.data(), int(frames.size()));
++
++    std::stringstream stack;
++
++    for (int i = 1; i < count; i++) {
++      Dl_info info = { };
++
++      if (dladdr(frames[i], &info) && info.dli_fname) {
++        const char* name = std::strrchr(info.dli_fname, '/');
++        stack << " " << (name ? name + 1 : info.dli_fname) << "+0x" << std::hex
++              << (reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(info.dli_fbase)) << std::dec;
++      } else {
++        stack << " " << frames[i];
++      }
++    }
++
++    Logger::info(str::format("Wait call stack (", Key, "):", stack.str()));
++#endif
++  }
++
++
++  void D3D9DeviceEx::ReportMainThreadWaits() {
++    if (likely(!LogMainThreadWaitsEnabled()))
++      return;
++
++    auto now = dxvk::high_resolution_clock::now();
++
++    std::lock_guard lock(g_waitMutex);
++    g_waitFrames += 1;
++
++    if (g_waitReportTime == dxvk::high_resolution_clock::time_point()) {
++      g_waitReportTime = now;
++      return;
++    }
++
++    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_waitReportTime).count();
++
++    if (elapsed < 10000)
++      return;
++
++    std::vector<std::pair<std::string, MainThreadWaitStats>> entries(g_waitStats.begin(), g_waitStats.end());
++    std::sort(entries.begin(), entries.end(), [] (const auto& a, const auto& b) { return a.second.ns > b.second.ns; });
++
++    Logger::info(str::format("Main thread waits over ", elapsed, " ms, ", g_waitFrames, " frames:"));
++
++    for (size_t i = 0; i < entries.size() && i < 8; i++) {
++      Logger::info(str::format("  ", entries[i].second.ns / 1000000, " ms in ",
++        entries[i].second.count, " waits: ", entries[i].first));
++    }
++
++    if (entries.empty())
++      Logger::info("  none");
++
++    g_waitStats.clear();
++    g_waitFrames = 0;
++    g_waitReportTime = now;
+   }
+ 
+ 
+diff --git a/src/d3d9/d3d9_device.h b/src/d3d9/d3d9_device.h
+index 1a020e67..3f28b126 100644
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -721,7 +721,22 @@ namespace dxvk {
+     bool WaitForResource(
+       const DxvkPagedResource&      Resource,
+             uint64_t                SequenceNumber,
+-            DWORD                   MapFlags);
++            DWORD                   MapFlags,
++            const char*             Caller = __builtin_FUNCTION(),
++            uint32_t                Line = __builtin_LINE());
++
++    static bool LogMainThreadWaitsEnabled();
++
++    static void LogMainThreadWait(
++            const char*             What,
++            const char*             Caller,
++            uint32_t                Line,
++            DWORD                   MapFlags,
++            dxvk::high_resolution_clock::time_point Start);
++
++    static void ReportMainThreadWaits();
++
++    static void LogWaitCallStack(const std::string& Key);
+ 
+     /**
+      * \brief Locks a subresource of an image
+@@ -821,7 +836,9 @@ namespace dxvk {
+ 
+     void CreateConstantBuffers();
+ 
+-    void SynchronizeCsThread(uint64_t SequenceNumber);
++    void SynchronizeCsThread(uint64_t SequenceNumber,
++            const char*             Caller = __builtin_FUNCTION(),
++            uint32_t                Line = __builtin_LINE());
+ 
+     void Flush();
+     void FlushAndSync9On12();
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index e51357f4..709e3631 100644
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -1126,8 +1126,20 @@ namespace dxvk {
+ 
+ 
+   void D3D9SwapChainEx::SyncFrameLatency() {
++    const bool logWait = D3D9DeviceEx::LogMainThreadWaitsEnabled();
++    const auto waitStart = logWait
++      ? dxvk::high_resolution_clock::now()
++      : dxvk::high_resolution_clock::time_point();
++
+     // Wait for the sync event so that we respect the maximum frame latency
+     m_wctx->frameLatencySignal->wait(m_wctx->frameId - GetActualFrameLatency());
++
++    if (unlikely(logWait)) {
++      D3D9DeviceEx::LogMainThreadWait(
++        str::format("frame latency wait (", GetActualFrameLatency(), " frames)").c_str(),
++        __func__, __LINE__, 0, waitStart);
++      D3D9DeviceEx::ReportMainThreadWaits();
++    }
+   }
+ 
+   uint32_t D3D9SwapChainEx::GetActualFrameLatency() {
+-- 
+2.43.0
+

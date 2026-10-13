@@ -22,6 +22,7 @@
 
 #include "GameClient/Smudge.h"
 #include "WWLib/sharebuf.h"
+#include "WW3D2/ww3dformat.h"
 
 class SmudgeGroupClass;	//forward reference.
 class Vector3;
@@ -47,6 +48,7 @@ public:
 
 private:
 	Bool testHardwareSupport();		///<test if video card supports the effect.
+	void createBackgroundTexture(UnsignedInt width, UnsignedInt height, WW3DFormat format);	///<texture the smudges copy the scene into.
 
 	enum { MAX_POINTS_PER_GROUP = 512 };
 
@@ -59,4 +61,5 @@ private:
 	DX8IndexBufferClass	*m_indexBuffer;
 	Int m_backBufferWidth;
 	Int m_backBufferHeight;
+	WW3DFormat m_backgroundFormat;
 };

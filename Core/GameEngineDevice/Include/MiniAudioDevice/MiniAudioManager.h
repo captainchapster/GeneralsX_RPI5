@@ -27,7 +27,11 @@
 #include "Common/AsciiString.h"
 #include "Common/AudioEventRTS.h"
 #include "Common/GameAudio.h"
+#include "Common/STLTypedefs.h"
 #include <miniaudio.h>
+
+#include <unordered_map>
+#include <vector>
 
 enum { MAXPROVIDERS = 64 };
 
@@ -47,6 +51,24 @@ struct PlayingAudio
 	RefCountPtr<DynamicAudioEventRTS> m_audioEventRTS;
 	Bool m_requestStop;
 	Int m_framesFaded;
+	// GeneralsX @bugfix rpi5 11/10/2026 Music loops like Miles (INFINITE_LOOP_COUNT); these track
+	// completed loops for hasMusicTrackCompleted().
+	Int m_loopsCompleted;
+	ma_uint64 m_lastCursor;
+	// GeneralsX @bugfix rpi5 11/10/2026 Set once this pass of a music track was counted before it
+	// wrapped (see processPlayingList).
+	Bool m_loopCountedEarly;
+	// GeneralsX @bugfix rpi5 11/10/2026 Gapless loops of sound effects. m_audioBuffer is the chain
+	// head the ma_sound was created from, m_currentBuffer the buffer it is playing now, and
+	// m_queuedBuffer the next loop's buffer, chained after m_currentBuffer when the formats match.
+	// m_nextLoopPrepared: the loop count and file name for the next loop are already set.
+	// m_queueFailed: the next loop's file did not decode, so it is not retried every frame.
+	ma_audio_buffer* m_currentBuffer;
+	ma_audio_buffer* m_queuedBuffer;
+	Bool m_nextLoopPrepared;
+	Bool m_queueFailed;
+	// GeneralsX @bugfix Claude 13/10/2026 Stopped by pauseAudio(); resumeAudio() starts it again.
+	Bool m_paused;
 
 	PlayingAudio() :
 		m_sound(NULL),
@@ -54,9 +76,42 @@ struct PlayingAudio
 		m_type(PAT_INVALID),
 		m_audioEventRTS(NULL),
 		m_requestStop(false),
-		m_framesFaded(0)
+		m_framesFaded(0),
+		m_loopsCompleted(0),
+		m_lastCursor(0),
+		m_loopCountedEarly(false),
+		m_currentBuffer(NULL),
+		m_queuedBuffer(NULL),
+		m_nextLoopPrepared(false),
+		m_queueFailed(false),
+		m_paused(false)
 	{ }
 };
+
+// GeneralsX @performance Claude 12/10/2026 A sound file decoded to PCM, shared by every sound
+// that plays it, like the file caches of the Miles and OpenAL backends. Decoding with FFmpeg on
+// every play cost several milliseconds per frame in battles, and stalls of up to a second.
+struct DecodedAudioFile
+{
+	std::vector<ma_uint8> m_pcm;
+	ma_format m_format;
+	ma_uint32 m_channels;
+	ma_uint32 m_sampleRate;
+	ma_uint64 m_frameCount;
+	UnsignedInt m_openCount;	// audio buffers playing this file; it stays cached while above 0
+	UnsignedInt m_lastUsed;		// m_decodedFileClock when last opened, for evicting the oldest
+
+	DecodedAudioFile() :
+		m_format(ma_format_unknown),
+		m_channels(0),
+		m_sampleRate(0),
+		m_frameCount(0),
+		m_openCount(0),
+		m_lastUsed(0)
+	{ }
+};
+
+typedef std::unordered_map< AsciiString, DecodedAudioFile *, rts::hash<AsciiString>, rts::equal_to<AsciiString> > DecodedAudioFileMap;
 
 class MiniAudioManager : public AudioManager
 {
@@ -162,6 +217,16 @@ protected:
 
 	// Looping functions
 	Bool startNextLoop(PlayingAudio *looping);
+	// GeneralsX @bugfix rpi5 11/10/2026 Restart a finished looping sound effect; false when it is done.
+	Bool continueLoopingSound(PlayingAudio *playing);
+	Bool prepareNextLoop(PlayingAudio *playing);
+	void queueNextLoop(PlayingAudio *playing);
+	void advanceQueuedLoop(PlayingAudio *playing);
+	// GeneralsX @refactor rpi5 11/10/2026 FFmpeg decode of a whole file into a new ma_audio_buffer.
+	// GeneralsX @performance Claude 12/10/2026 The buffer now plays the cached decoded file; free it
+	// with freeAudioBuffer().
+	ma_audio_buffer *decodeFileToBuffer(const AsciiString &fileToPlay);
+	void freeAudioBuffer(ma_audio_buffer *buffer);
 
 	void playStream(AudioEventRTS *event, ma_sound *sound);
 
@@ -176,6 +241,7 @@ protected:
 	void playAudioEvent(AudioRequest *req);
 	void stopAudioEvent(AudioHandle handle);
 	void pauseAudioEvent(AudioHandle handle);
+	static AudioAffect getAudioAffect(const PlayingAudio *playing);
 
 	PlayingAudio *allocatePlayingAudio(void);
 	void releaseMiniAudioHandles(PlayingAudio *release);
@@ -187,6 +253,12 @@ protected:
 	void adjustPlayingVolume(PlayingAudio *audio);
 
 	void stopAllSpeech(void);
+
+	// GeneralsX @performance Claude 12/10/2026 Decoded file cache (see DecodedAudioFile).
+	DecodedAudioFile *openDecodedFile(const AsciiString &fileName);
+	DecodedAudioFile *decodeFile(const AsciiString &fileName);
+	void trimDecodedFiles(void);
+	void freeDecodedFiles(void);
 
 protected:
 	ma_device_info* m_playbackDevices;
@@ -221,6 +293,10 @@ protected:
 	// This stuff should be cleaned up during the next update cycle. This includes updating counts
 	// in the sound engine
 	std::list<PlayingAudio *> m_stoppedAudio;
+
+	DecodedAudioFileMap m_decodedFiles;
+	size_t m_decodedFilesSize;
+	UnsignedInt m_decodedFileClock;
 
 	void *m_binkHandle;
 

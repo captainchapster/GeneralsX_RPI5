@@ -1,0 +1,511 @@
+From ebf33c32a54837a5473afffcbb25bdfe8d035cfc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 02:30:38 +0000
+Subject: [PATCH] Support V3DV (Raspberry Pi 5) and build natively on Linux
+
+- Enable Vulkan beta headers on all platforms so the portability-subset
+  code compiles outside macOS.
+- Make VK_EXT_robustness2 optional and only enable robustBufferAccess2 /
+  nullDescriptor when the device supports them.
+- Only enable multiDrawIndirect and shaderDrawParameters when supported;
+  the HUD now indexes draws by gl_InstanceIndex and falls back to one
+  indirect draw per text item.
+- Without nullDescriptor, bind zeroed dummy images, texel buffer views and
+  buffers for unbound descriptor slots.
+---
+ src/dxvk/dxvk_adapter.cpp                     |  22 +--
+ src/dxvk/dxvk_context.cpp                     |  48 +++++--
+ src/dxvk/dxvk_context.h                       |   8 ++
+ src/dxvk/dxvk_extensions.h                    |   2 +-
+ src/dxvk/dxvk_unbound.cpp                     | 130 ++++++++++++++++++
+ src/dxvk/dxvk_unbound.h                       |  47 ++++++-
+ src/dxvk/hud/dxvk_hud_renderer.cpp            |  18 ++-
+ src/dxvk/hud/shaders/hud_frame_time_eval.comp |   2 +-
+ src/dxvk/hud/shaders/hud_text_vert.vert       |   2 +-
+ 9 files changed, 252 insertions(+), 27 deletions(-)
+
+diff --git a/src/dxvk/dxvk_adapter.cpp b/src/dxvk/dxvk_adapter.cpp
+index 981b0003..3f6b4816 100644
+--- a/src/dxvk/dxvk_adapter.cpp
++++ b/src/dxvk/dxvk_adapter.cpp
+@@ -2,9 +2,9 @@
+ // (VkPhysicalDevicePortabilitySubsetFeaturesKHR, VK_STRUCTURE_TYPE_*_PORTABILITY_SUBSET_*).
+ // These are guarded by VK_ENABLE_BETA_EXTENSIONS in vulkan_core.h and vulkan_beta.h.
+ // This define MUST appear before any Vulkan header is pulled in.
+-#ifdef __APPLE__
++// Also needed on other platforms: the portability-subset code below is
++// compiled everywhere and only takes effect when the driver exposes it.
+ #define VK_ENABLE_BETA_EXTENSIONS
+-#endif
+ 
+ #include <cstring>
+ #include <unordered_set>
+@@ -16,9 +16,7 @@
+ // macOS: VkPhysicalDevicePortabilitySubsetFeaturesKHR lives in vulkan_beta.h.
+ // Included after dxvk headers (which pull in vulkan.h) but VK_ENABLE_BETA_EXTENSIONS
+ // defined above ensures the portability types are active in vulkan_core.h too.
+-#ifdef __APPLE__
+ #include <vulkan/vulkan_beta.h>
+-#endif
+ 
+ namespace dxvk {
+ 
+@@ -367,9 +365,12 @@ namespace dxvk {
+       enabledFeatures.core.features.sparseResidencyBuffer = m_deviceFeatures.core.features.sparseResidencyBuffer;
+     }
+ 
+-    // Always enable features used by the HUD
+-    enabledFeatures.core.features.multiDrawIndirect = VK_TRUE;
+-    enabledFeatures.vk11.shaderDrawParameters = VK_TRUE;
++    // Features used by the HUD. The HUD works without them (one draw per
++    // text item), which matters for drivers such as V3DV that lack both.
++    enabledFeatures.core.features.multiDrawIndirect =
++      m_deviceFeatures.core.features.multiDrawIndirect;
++    enabledFeatures.vk11.shaderDrawParameters =
++      m_deviceFeatures.vk11.shaderDrawParameters;
+ 
+     // Enable variable multisample rate if supported
+     enabledFeatures.core.features.variableMultisampleRate =
+@@ -469,14 +470,17 @@ namespace dxvk {
+     // macOS/MoltenVK: despite reporting these features as supported via
+     // vkGetPhysicalDeviceFeatures2, vkCreateDevice rejects them with
+     // VK_ERROR_FEATURE_NOT_PRESENT when VK_KHR_portability_subset is active.
++    // V3DV (Raspberry Pi 5) does not expose VK_EXT_robustness2 at all, so
++    // these are only enabled when supported; DxvkUnboundResources supplies
++    // dummy descriptors when nullDescriptor is unavailable.
+ #ifdef __APPLE__
+     enabledFeatures.extRobustness2.robustBufferAccess2 = VK_FALSE;
+     enabledFeatures.extRobustness2.robustImageAccess2 = VK_FALSE;
+     enabledFeatures.extRobustness2.nullDescriptor = VK_FALSE;
+ #else
+-    enabledFeatures.extRobustness2.robustBufferAccess2 = VK_TRUE;
++    enabledFeatures.extRobustness2.robustBufferAccess2 = m_deviceFeatures.extRobustness2.robustBufferAccess2;
+     enabledFeatures.extRobustness2.robustImageAccess2 = m_deviceFeatures.extRobustness2.robustImageAccess2;
+-    enabledFeatures.extRobustness2.nullDescriptor = VK_TRUE;
++    enabledFeatures.extRobustness2.nullDescriptor = m_deviceFeatures.extRobustness2.nullDescriptor;
+ #endif
+ 
+     // We use this to avoid decompressing SPIR-V shaders in some situations
+diff --git a/src/dxvk/dxvk_context.cpp b/src/dxvk/dxvk_context.cpp
+index e3d2a92d..098d2e56 100644
+--- a/src/dxvk/dxvk_context.cpp
++++ b/src/dxvk/dxvk_context.cpp
+@@ -75,6 +75,13 @@ namespace dxvk {
+       m_descriptorPool = m_descriptorManager->getDescriptorPool();
+ 
+     this->beginCurrentCommands();
++
++    // Without nullDescriptor (e.g. V3DV on Raspberry Pi 5), unbound
++    // descriptors point at dummy resources, which must be cleared once.
++    if (unlikely(!m_device->features().extRobustness2.nullDescriptor)) {
++      for (const auto& image : m_common->dummyResources().createImages())
++        this->initImage(image, image->getAvailableSubresources(), VK_IMAGE_LAYOUT_UNDEFINED);
++    }
+   }
+   
+   
+@@ -6134,8 +6141,9 @@ namespace dxvk {
+               }
+             } else {
+               descriptorInfo.image.sampler = VK_NULL_HANDLE;
+-              descriptorInfo.image.imageView = VK_NULL_HANDLE;
+-              descriptorInfo.image.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++              descriptorInfo.image.imageView = getDummyImageView(binding.viewType);
++              descriptorInfo.image.imageLayout = descriptorInfo.image.imageView
++                ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+             }
+           } break;
+ 
+@@ -6159,8 +6167,9 @@ namespace dxvk {
+                 ? DxvkAccess::Write : DxvkAccess::Read);
+             } else {
+               descriptorInfo.image.sampler = VK_NULL_HANDLE;
+-              descriptorInfo.image.imageView = VK_NULL_HANDLE;
+-              descriptorInfo.image.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++              descriptorInfo.image.imageView = getDummyImageView(binding.viewType);
++              descriptorInfo.image.imageLayout = descriptorInfo.image.imageView
++                ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+             }
+           } break;
+ 
+@@ -6195,8 +6204,9 @@ namespace dxvk {
+               }
+             } else {
+               descriptorInfo.image.sampler = m_common->dummyResources().samplerHandle();
+-              descriptorInfo.image.imageView = VK_NULL_HANDLE;
+-              descriptorInfo.image.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++              descriptorInfo.image.imageView = getDummyImageView(binding.viewType);
++              descriptorInfo.image.imageLayout = descriptorInfo.image.imageView
++                ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+             }
+           } break;
+ 
+@@ -6211,7 +6221,7 @@ namespace dxvk {
+ 
+               m_cmd->track(res.bufferView->buffer(), DxvkAccess::Read);
+             } else {
+-              descriptorInfo.texelBuffer = VK_NULL_HANDLE;
++              descriptorInfo.texelBuffer = getDummyBufferView();
+             }
+           } break;
+ 
+@@ -6227,7 +6237,7 @@ namespace dxvk {
+               m_cmd->track(res.bufferView->buffer(), (binding.access & vk::AccessWriteMask)
+                 ? DxvkAccess::Write : DxvkAccess::Read);
+             } else {
+-              descriptorInfo.texelBuffer = VK_NULL_HANDLE;
++              descriptorInfo.texelBuffer = getDummyBufferView();
+             }
+           } break;
+ 
+@@ -6242,7 +6252,7 @@ namespace dxvk {
+ 
+               m_cmd->track(res.bufferSlice.buffer(), DxvkAccess::Read);
+             } else {
+-              descriptorInfo.buffer.buffer = VK_NULL_HANDLE;
++              descriptorInfo.buffer.buffer = getDummyBuffer();
+               descriptorInfo.buffer.offset = 0;
+               descriptorInfo.buffer.range = VK_WHOLE_SIZE;
+             }
+@@ -6260,7 +6270,7 @@ namespace dxvk {
+               m_cmd->track(res.bufferSlice.buffer(), (binding.access & vk::AccessWriteMask)
+                 ? DxvkAccess::Write : DxvkAccess::Read);
+             } else {
+-              descriptorInfo.buffer.buffer = VK_NULL_HANDLE;
++              descriptorInfo.buffer.buffer = getDummyBuffer();
+               descriptorInfo.buffer.offset = 0;
+               descriptorInfo.buffer.range = VK_WHOLE_SIZE;
+             }
+@@ -8806,4 +8816,22 @@ namespace dxvk {
+       m_cmd->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
+   }
+ 
++
++  VkImageView DxvkContext::getDummyImageView(VkImageViewType type) {
++    return likely(m_device->features().extRobustness2.nullDescriptor)
++      ? VK_NULL_HANDLE : m_common->dummyResources().imageViewHandle(type);
++  }
++
++
++  VkBufferView DxvkContext::getDummyBufferView() {
++    return likely(m_device->features().extRobustness2.nullDescriptor)
++      ? VK_NULL_HANDLE : m_common->dummyResources().bufferViewHandle();
++  }
++
++
++  VkBuffer DxvkContext::getDummyBuffer() {
++    return likely(m_device->features().extRobustness2.nullDescriptor)
++      ? VK_NULL_HANDLE : m_common->dummyResources().bufferHandle();
++  }
++
+ }
+diff --git a/src/dxvk/dxvk_context.h b/src/dxvk/dxvk_context.h
+index de223e32..60630932 100644
+--- a/src/dxvk/dxvk_context.h
++++ b/src/dxvk/dxvk_context.h
+@@ -2182,6 +2182,14 @@ namespace dxvk {
+     static VkFormat sanitizeTexelBufferFormat(
+             VkFormat                  srcFormat);
+ 
++    // Descriptors for unbound resources. With nullDescriptor these are
++    // null handles; otherwise they point at zeroed dummy resources.
++    VkImageView getDummyImageView(VkImageViewType type);
++
++    VkBufferView getDummyBufferView();
++
++    VkBuffer getDummyBuffer();
++
+   };
+   
+ }
+diff --git a/src/dxvk/dxvk_extensions.h b/src/dxvk/dxvk_extensions.h
+index aa002a77..cac16df5 100644
+--- a/src/dxvk/dxvk_extensions.h
++++ b/src/dxvk/dxvk_extensions.h
+@@ -311,7 +311,7 @@ namespace dxvk {
+     DxvkExt extMultiDraw                      = { VK_EXT_MULTI_DRAW_EXTENSION_NAME,                         DxvkExtMode::Optional };
+     DxvkExt extNonSeamlessCubeMap             = { VK_EXT_NON_SEAMLESS_CUBE_MAP_EXTENSION_NAME,              DxvkExtMode::Optional };
+     DxvkExt extPageableDeviceLocalMemory      = { VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME,       DxvkExtMode::Optional };
+-    DxvkExt extRobustness2                    = { VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,                       DxvkExtMode::Required };
++    DxvkExt extRobustness2                    = { VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,                       DxvkExtMode::Optional };
+     DxvkExt extShaderModuleIdentifier         = { VK_EXT_SHADER_MODULE_IDENTIFIER_EXTENSION_NAME,           DxvkExtMode::Optional };
+     DxvkExt extShaderStencilExport            = { VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME,              DxvkExtMode::Optional };
+     DxvkExt extSwapchainColorSpace            = { VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,              DxvkExtMode::Optional };
+diff --git a/src/dxvk/dxvk_unbound.cpp b/src/dxvk/dxvk_unbound.cpp
+index 63e3f4d5..ac9b1380 100644
+--- a/src/dxvk/dxvk_unbound.cpp
++++ b/src/dxvk/dxvk_unbound.cpp
+@@ -53,6 +53,136 @@ namespace dxvk {
+   }
+ 
+ 
++  std::vector<Rc<DxvkImage>> DxvkUnboundResources::createImages() {
++    std::vector<Rc<DxvkImage>> images;
++
++    if (m_imagesReady.load(std::memory_order_acquire))
++      return images;
++
++    std::lock_guard lock(m_mutex);
++
++    if (m_imageView2D != nullptr)
++      return images;
++
++    m_imageView1D = createImageView(VK_IMAGE_TYPE_1D, VK_IMAGE_VIEW_TYPE_1D_ARRAY, 1u, 0u, images);
++    m_imageView2D = createImageView(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 6u, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, images);
++    m_imageView3D = createImageView(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1u, 0u, images);
++
++    // Create every view type up front so lookups need no locking
++    for (uint32_t i = 0; i < m_imageViewHandles.size(); i++) {
++      auto type = VkImageViewType(i);
++
++      switch (type) {
++        case VK_IMAGE_VIEW_TYPE_1D:
++        case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
++          m_imageViewHandles[i] = m_imageView1D->handle(type);
++          break;
++
++        case VK_IMAGE_VIEW_TYPE_3D:
++          m_imageViewHandles[i] = m_imageView3D->handle(type);
++          break;
++
++        case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
++          if (!m_device->features().core.features.imageCubeArray)
++            break;
++          [[fallthrough]];
++
++        default:
++          m_imageViewHandles[i] = m_imageView2D->handle(type);
++      }
++    }
++
++    m_imagesReady.store(true, std::memory_order_release);
++    return images;
++  }
++
++
++  VkImageView DxvkUnboundResources::imageViewHandle(VkImageViewType type) {
++    if (unlikely(!m_imagesReady.load(std::memory_order_acquire)))
++      return VK_NULL_HANDLE;
++
++    return uint32_t(type) < m_imageViewHandles.size()
++      ? m_imageViewHandles[type]
++      : VK_NULL_HANDLE;
++  }
++
++
++  VkBufferView DxvkUnboundResources::bufferViewHandle() {
++    VkBufferView view = m_bufferViewHandle.load();
++
++    if (likely(view != VK_NULL_HANDLE))
++      return view;
++
++    // Make sure the backing buffer exists before taking the lock
++    bufferHandle();
++
++    std::lock_guard lock(m_mutex);
++    view = m_bufferViewHandle.load();
++
++    if (view)
++      return view;
++
++    DxvkBufferViewKey key;
++    key.format = VK_FORMAT_R32_UINT;
++    key.usage = VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT
++              | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
++    key.offset = 0u;
++    key.size = m_buffer->info().size;
++
++    m_bufferView = m_buffer->createView(key);
++    view = m_bufferView->handle();
++
++    m_bufferViewHandle.store(view, std::memory_order_release);
++    return view;
++  }
++
++
++  Rc<DxvkImageView> DxvkUnboundResources::createImageView(
++          VkImageType     type,
++          VkImageViewType viewType,
++          uint32_t        layers,
++          VkImageCreateFlags flags,
++          std::vector<Rc<DxvkImage>>& images) {
++    DxvkImageCreateInfo info;
++    info.type        = type;
++    info.format      = VK_FORMAT_R8G8B8A8_UNORM;
++    info.flags       = flags;
++    info.sampleCount = VK_SAMPLE_COUNT_1_BIT;
++    info.extent      = { 1u, 1u, 1u };
++    info.numLayers   = layers;
++    info.mipLevels   = 1u;
++    info.usage       = VK_IMAGE_USAGE_SAMPLED_BIT
++                     | VK_IMAGE_USAGE_STORAGE_BIT
++                     | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++    info.stages      = VK_PIPELINE_STAGE_TRANSFER_BIT
++                     | m_device->getShaderPipelineStages();
++    info.access      = VK_ACCESS_TRANSFER_WRITE_BIT
++                     | VK_ACCESS_SHADER_READ_BIT
++                     | VK_ACCESS_SHADER_WRITE_BIT;
++    info.tiling      = VK_IMAGE_TILING_OPTIMAL;
++    info.layout      = VK_IMAGE_LAYOUT_GENERAL;
++    info.shared      = VK_TRUE;
++    info.debugName   = "Null image";
++
++    Rc<DxvkImage> image = m_device->createImage(info,
++      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++    images.push_back(image);
++
++    DxvkImageViewKey key;
++    key.viewType   = viewType;
++    key.usage      = VK_IMAGE_USAGE_SAMPLED_BIT
++                   | VK_IMAGE_USAGE_STORAGE_BIT;
++    key.format     = info.format;
++    key.aspects    = VK_IMAGE_ASPECT_COLOR_BIT;
++    key.mipIndex   = 0u;
++    key.mipCount   = 1u;
++    key.layerIndex = 0u;
++    key.layerCount = layers;
++
++    return image->createView(key);
++  }
++
++
+   Rc<DxvkSampler> DxvkUnboundResources::createSampler() {
+     DxvkSamplerKey info;
+     info.setFilter(VK_FILTER_LINEAR, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR);
+diff --git a/src/dxvk/dxvk_unbound.h b/src/dxvk/dxvk_unbound.h
+index 9caa9fd8..36e95229 100644
+--- a/src/dxvk/dxvk_unbound.h
++++ b/src/dxvk/dxvk_unbound.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
++#include <array>
+ #include <mutex>
++#include <vector>
+ 
+ #include "dxvk_buffer.h"
+ #include "dxvk_image.h"
+@@ -43,7 +45,34 @@ namespace dxvk {
+      * \returns Dummy sampler descriptor
+      */
+     VkSampler samplerHandle();
+-    
++
++    /**
++     * \brief Creates dummy images for devices without nullDescriptor
++     *
++     * Only needed when \c VK_EXT_robustness2 nullDescriptor is not
++     * available (e.g. V3DV on Raspberry Pi 5). Creates the images once,
++     * and returns them only to the first caller, which must initialize
++     * them on its context. Returns an empty list on later calls.
++     * \returns Images that still need to be initialized
++     */
++    std::vector<Rc<DxvkImage>> createImages();
++
++    /**
++     * \brief Dummy image view for a given view type
++     *
++     * Returns \c VK_NULL_HANDLE if dummy images have not been
++     * created, or if no dummy image is compatible with the type.
++     * \param [in] type View type
++     * \returns Image view handle, layout is \c VK_IMAGE_LAYOUT_GENERAL
++     */
++    VkImageView imageViewHandle(VkImageViewType type);
++
++    /**
++     * \brief Dummy texel buffer view
++     * \returns Buffer view handle over the zero buffer
++     */
++    VkBufferView bufferViewHandle();
++
+   private:
+     
+     DxvkDevice*             m_device;
+@@ -54,6 +83,22 @@ namespace dxvk {
+     dxvk::mutex             m_mutex;
+     Rc<DxvkSampler>         m_sampler;
+     Rc<DxvkBuffer>          m_buffer;
++
++    std::atomic<bool>       m_imagesReady = { false };
++    Rc<DxvkImageView>       m_imageView1D;
++    Rc<DxvkImageView>       m_imageView2D;
++    Rc<DxvkImageView>       m_imageView3D;
++    std::array<VkImageView, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY + 1> m_imageViewHandles = { };
++
++    std::atomic<VkBufferView> m_bufferViewHandle = { VK_NULL_HANDLE };
++    Rc<DxvkBufferView>      m_bufferView;
++
++    Rc<DxvkImageView> createImageView(
++            VkImageType     type,
++            VkImageViewType viewType,
++            uint32_t        layers,
++            VkImageCreateFlags flags,
++            std::vector<Rc<DxvkImage>>& images);
+     
+     Rc<DxvkSampler> createSampler();
+     
+diff --git a/src/dxvk/hud/dxvk_hud_renderer.cpp b/src/dxvk/hud/dxvk_hud_renderer.cpp
+index 78f39067..78c175aa 100644
+--- a/src/dxvk/hud/dxvk_hud_renderer.cpp
++++ b/src/dxvk/hud/dxvk_hud_renderer.cpp
+@@ -188,7 +188,7 @@ namespace dxvk::hud {
+       drawArgs[i].vertexCount = 6u * m_textDraws[i].textLength;
+       drawArgs[i].instanceCount = 1u;
+       drawArgs[i].firstVertex = 0u;
+-      drawArgs[i].firstInstance = 0u;
++      drawArgs[i].firstInstance = uint32_t(i);
+     }
+ 
+     std::memset(m_textBuffer->mapPtr(drawArgOffset + drawArgWriteSize), 0, drawArgsSize - drawArgWriteSize);
+@@ -259,9 +259,19 @@ namespace dxvk::hud {
+       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+       0, sizeof(m_pushConstants), &m_pushConstants);
+ 
+-    // Emit the actual draw call
+-    ctx.cmd->cmdDrawIndirect(drawArgs.buffer, drawArgs.offset,
+-      drawCount, sizeof(VkDrawIndirectCommand));
++    // Emit the actual draw call. Without multiDrawIndirect (e.g. V3DV),
++    // issue one indirect draw per text item; the shader indexes draw
++    // infos by gl_InstanceIndex, so this is equivalent.
++    if (m_device->features().core.features.multiDrawIndirect) {
++      ctx.cmd->cmdDrawIndirect(drawArgs.buffer, drawArgs.offset,
++        drawCount, sizeof(VkDrawIndirectCommand));
++    } else {
++      for (uint32_t i = 0; i < drawCount; i++) {
++        ctx.cmd->cmdDrawIndirect(drawArgs.buffer,
++          drawArgs.offset + i * sizeof(VkDrawIndirectCommand),
++          1, sizeof(VkDrawIndirectCommand));
++      }
++    }
+   }
+ 
+ 
+diff --git a/src/dxvk/hud/shaders/hud_frame_time_eval.comp b/src/dxvk/hud/shaders/hud_frame_time_eval.comp
+index 3d530672..74b8f3c1 100644
+--- a/src/dxvk/hud/shaders/hud_frame_time_eval.comp
++++ b/src/dxvk/hud/shaders/hud_frame_time_eval.comp
+@@ -173,7 +173,7 @@ void main() {
+     draw_params[tid].vertex_count = 6u * len;
+     draw_params[tid].instance_count = 1u;
+     draw_params[tid].first_vertex = 0u;
+-    draw_params[tid].first_instance = 0u;
++    draw_params[tid].first_instance = tid;
+   }
+ 
+   barrier();
+diff --git a/src/dxvk/hud/shaders/hud_text_vert.vert b/src/dxvk/hud/shaders/hud_text_vert.vert
+index f63bb967..736e33a4 100644
+--- a/src/dxvk/hud/shaders/hud_text_vert.vert
++++ b/src/dxvk/hud/shaders/hud_text_vert.vert
+@@ -52,7 +52,7 @@ vec2 unpack_u16(uint v) {
+ }
+ 
+ void main() {
+-  draw_info_t draw_info = draw_infos[gl_DrawID];
++  draw_info_t draw_info = draw_infos[gl_InstanceIndex];
+   o_color = unpackUnorm4x8(draw_info.color);
+ 
+   // Compute character index and vertex index for the current
+-- 
+2.43.0
+

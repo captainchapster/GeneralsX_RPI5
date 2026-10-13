@@ -26,6 +26,8 @@
 // Class to handle tile data.
 // Author: John Ahlquist, April 2001
 
+#include <string.h>
+
 #include "W3DDevice/GameClient/TileData.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 
@@ -43,17 +45,8 @@ TileData::TileData()
 
 }
 
-// GeneralsX @feature mrkinglollipop 11/07/2026 Bumps this local mip-extent copy to match TileData.h's
-// 8-level chain (128/64/32/16/8/4/2/1); shadows the header's #defines (as it did
-// before this change) -- kept in sync manually.
-#define TILE_PIXEL_EXTENT_MIP1 128
-#define TILE_PIXEL_EXTENT_MIP2 64
-#define TILE_PIXEL_EXTENT_MIP3 32
-#define TILE_PIXEL_EXTENT_MIP4 16
-#define TILE_PIXEL_EXTENT_MIP5 8
-#define TILE_PIXEL_EXTENT_MIP6 4
-#define TILE_PIXEL_EXTENT_MIP7 2
-#define TILE_PIXEL_EXTENT_MIP8 1
+// GeneralsX @build rpi5 11/10/2026 The mip extents come from TileData.h (derived from
+// TILE_PIXEL_EXTENT) instead of a local copy, so they follow RTS_RETAIL_TERRAIN_TILES.
 
 Bool TileData::hasRGBDataForWidth(Int width)
 {
@@ -103,6 +96,12 @@ void TileData::updateMips()
 
 void TileData::doMip(UnsignedByte *pHiRes, Int hiRow, UnsignedByte *pLoRes)
 {
+	// GeneralsX @build rpi5 11/10/2026 With retail 64px tiles the chain bottoms out early and
+	// the last levels are 1x1 -> 1x1; copy the pixel instead of reading past the 1x1 source.
+	if (hiRow < 2) {
+		memcpy(pLoRes, pHiRes, TILE_BYTES_PER_PIXEL);
+		return;
+	}
 	Int i, j;
 	for (i=0; i<hiRow; i+=2) {
 		for (j=0; j<hiRow; j+=2) {

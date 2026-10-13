@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# GeneralsX @build rpi5 12/10/2026
+# Package a Raspberry Pi 5 build of Zero Hour, with its Mesa V3DV driver, into one tarball.
+#
+# Usage, from the repository root, after build-pi5-zh.sh and build-pi5-mesa.sh:
+#   ./scripts/build/linux/bundle-pi5-zh.sh                       # Mesa from /opt/mesa-current
+#   MESA_PREFIX=$HOME/mesa-pi5 ./scripts/build/linux/bundle-pi5-zh.sh
+#
+# Output: GeneralsXZH-pi5-aarch64.tar.gz in the repository root (OUTPUT_TARBALL to change), holding
+#   GeneralsXZH-pi5/
+#     Setup                 double-click to install (setup-pi5-launcher.c): runs .setup/setup-pi5-zh.sh,
+#                           which opens the Setup wizard (setup-pi5-zh.py)
+#     README.txt            the Pi guide
+#     .setup/               hidden, so Setup is the obvious thing to open:
+#       game/               GeneralsXZH, its libraries and run.sh (installed next to the game data)
+#       mesa/               V3DV Vulkan driver and an ICD JSON that points at it relatively
+#       install-pi5-zh.sh   installer the wizard drives (see its header)
+#       setup-pi5-zh.sh, setup-pi5-zh.py, run-pi5-zh.sh, install-pi5-desktop.sh,
+#       generalsx-zh.png, README-PI5.txt, LICENSE.txt, VERSION
+# No game data is included.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PRESET="linux-aarch64"
+MESA_PREFIX="${MESA_PREFIX:-/opt/mesa-current}"
+OUTPUT_TARBALL="${OUTPUT_TARBALL:-${PROJECT_ROOT}/GeneralsXZH-pi5-aarch64.tar.gz}"
+STAGE_ROOT="$(mktemp -d)"
+STAGE="${STAGE_ROOT}/GeneralsXZH-pi5"
+# Only Setup and the README are visible in the package; everything else is in a hidden folder.
+FILES="${STAGE}/.setup"
+trap 'rm -rf "${STAGE_ROOT}"' EXIT
+
+icd_src="$(compgen -G "${MESA_PREFIX}/share/vulkan/icd.d/broadcom_icd*.json" | head -1 || true)"
+driver_src="$(find -L "${MESA_PREFIX}" -name 'libvulkan_broadcom.so' -print -quit 2>/dev/null || true)"
+if [[ -z "${icd_src}" || -z "${driver_src}" ]]; then
+  echo "ERROR: no V3DV driver under ${MESA_PREFIX}; run build-pi5-mesa.sh or set MESA_PREFIX"
+  exit 1
+fi
+
+echo "== Staging the game"
+mkdir -p "${FILES}/game"
+GENERALSX_DEPLOY_DIR="${FILES}/game" "${SCRIPT_DIR}/deploy-linux-zh.sh" "${PRESET}"
+
+echo "== Staging the Mesa V3DV driver from ${MESA_PREFIX}"
+mkdir -p "${FILES}/mesa/lib" "${FILES}/mesa/share/vulkan/icd.d"
+cp -L "${driver_src}" "${FILES}/mesa/lib/libvulkan_broadcom.so"
+# The Vulkan loader resolves a library_path containing a slash relative to the JSON file.
+sed -E 's#("library_path"[[:space:]]*:[[:space:]]*")[^"]*"#\1../../../lib/libvulkan_broadcom.so"#' \
+  "${icd_src}" > "${FILES}/mesa/share/vulkan/icd.d/$(basename "${icd_src}")"
+mesa_version="$(basename "$(readlink -f "${MESA_PREFIX}")")"
+
+echo "== Staging the launcher and installer"
+# Setup is a small program rather than a script, so that a double click runs it.
+cc -O2 -no-pie -o "${STAGE}/Setup" "${SCRIPT_DIR}/setup-pi5-launcher.c"
+cp "${SCRIPT_DIR}/setup-pi5-zh.sh" "${SCRIPT_DIR}/setup-pi5-zh.py" "${SCRIPT_DIR}/install-pi5-zh.sh" \
+  "${SCRIPT_DIR}/run-pi5-zh.sh" "${SCRIPT_DIR}/install-pi5-desktop.sh" "${FILES}/"
+chmod +x "${STAGE}/Setup" "${FILES}"/*.sh "${FILES}/setup-pi5-zh.py"
+cp "${PROJECT_ROOT}/assets/generalsx-zh_icon.png" "${FILES}/generalsx-zh.png"
+cp "${PROJECT_ROOT}/docs/HOWTO/RASPBERRY_PI_5.md" "${FILES}/README-PI5.txt"
+cp "${PROJECT_ROOT}/docs/HOWTO/RASPBERRY_PI_5.md" "${STAGE}/README.txt"
+cp "${PROJECT_ROOT}/LICENSE.md" "${FILES}/LICENSE.txt"
+{
+  echo "commit=$(git -C "${PROJECT_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  echo "mesa=${mesa_version}"
+  echo "built=$(date -u +%Y-%m-%d)"
+} > "${FILES}/VERSION"
+
+echo "== Writing ${OUTPUT_TARBALL}"
+tar -C "${STAGE_ROOT}" -czf "${OUTPUT_TARBALL}" GeneralsXZH-pi5
+ls -la "${OUTPUT_TARBALL}"
+cat "${FILES}/VERSION"

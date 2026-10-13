@@ -1,0 +1,81 @@
+From 6cca322a025395703ce5fa50796e3025520c7b57 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 01:46:10 +0000
+Subject: [PATCH] context: log what ends each render pass with
+ DXVK_LOG_RENDER_PASSES=1
+
+Tiling GPUs such as V3DV store every tile when a render pass ends and load
+them again when the next one starts, so log the DxvkContext function and
+line that ended each render pass, once per call site plus counts at
+100/1000/10000/100000.
+---
+ src/dxvk/dxvk_context.cpp | 25 ++++++++++++++++++++++++-
+ src/dxvk/dxvk_context.h   |  8 +++++++-
+ 2 files changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/src/dxvk/dxvk_context.cpp b/src/dxvk/dxvk_context.cpp
+index 82a0df7d..7d1c85df 100644
+--- a/src/dxvk/dxvk_context.cpp
++++ b/src/dxvk/dxvk_context.cpp
+@@ -5358,8 +5358,13 @@ namespace dxvk {
+   }
+   
+   
+-  void DxvkContext::spillRenderPass(bool suspend) {
++  void DxvkContext::spillRenderPass(bool suspend, const char* caller, uint32_t line) {
+     if (m_flags.test(DxvkContextFlag::GpRenderPassBound)) {
++      static const bool s_logRenderPasses = env::getEnvVar("DXVK_LOG_RENDER_PASSES") == "1";
++
++      if (unlikely(s_logRenderPasses))
++        logRenderPassSpill(caller, line);
++
+       m_flags.clr(DxvkContextFlag::GpRenderPassBound,
+                   DxvkContextFlag::GpRenderPassSideEffects,
+                   DxvkContextFlag::GpRenderPassNeedsFlush);
+@@ -5569,6 +5574,24 @@ namespace dxvk {
+   }
+ 
+ 
++  void DxvkContext::logRenderPassSpill(
++          const char*                 caller,
++          uint32_t                    line) {
++    // Every render pass that ends early forces a tiling GPU to store all tiles
++    // and load them again for the next pass, so record what ended each pass.
++    std::string reason = str::format(caller, ":", line);
++
++    static dxvk::mutex s_mutex;
++    static std::unordered_map<std::string, uint64_t> s_counts;
++
++    std::lock_guard lock(s_mutex);
++    uint64_t count = ++s_counts[reason];
++
++    if (count == 1 || count == 100 || count == 1000 || count == 10000 || count == 100000)
++      Logger::info(str::format("Render pass end #", count, ": ", reason));
++  }
++
++
+   void DxvkContext::renderPassBindFramebuffer(
+     const DxvkFramebufferInfo&  framebufferInfo,
+     const DxvkRenderPassOps&    ops) {
+diff --git a/src/dxvk/dxvk_context.h b/src/dxvk/dxvk_context.h
+index 538a9774..c0205247 100644
+--- a/src/dxvk/dxvk_context.h
++++ b/src/dxvk/dxvk_context.h
+@@ -1674,7 +1674,13 @@ namespace dxvk {
+     void flushResolves();
+ 
+     void startRenderPass();
+-    void spillRenderPass(bool suspend);
++    void spillRenderPass(bool suspend,
++      const char*                 caller = __builtin_FUNCTION(),
++      uint32_t                    line = __builtin_LINE());
++
++    void logRenderPassSpill(
++      const char*                 caller,
++      uint32_t                    line);
+     
+     void renderPassEmitInitBarriers(
+       const DxvkFramebufferInfo&  framebufferInfo,
+-- 
+2.43.0
+

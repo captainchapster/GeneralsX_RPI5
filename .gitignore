@@ -82,6 +82,7 @@ GeneralsX-macos-*.zip
 GeneralsXZH-macos-*.zip
 GeneralsX-linux-*.tar.gz
 GeneralsXZH-linux-*.tar.gz
+GeneralsXZH-pi5-*.tar.gz
 
 # flatpak build files (exclude staging/build dirs but track scripts and manifests)
 .flatpak-builder/

@@ -326,6 +326,7 @@ Name=Command & Conquer Generals Zero Hour (GeneralsXZH)
 Comment=Cross-platform Generals Zero Hour runtime
 Exec=GeneralsXZH
 Icon=GeneralsXZH
+StartupWMClass=com.fbraz3.GeneralsXZH
 Categories=Game;StrategyGame;
 Terminal=false
 EOF

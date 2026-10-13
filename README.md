@@ -2,95 +2,91 @@
   <img src="assets/generalsx-zh_icon.png" alt="GeneralsX Logo" width="128" height="128">
 </p>
 
-<h1 align="center">GeneralsX</h1>
+<h1 align="center">GeneralsX for Raspberry Pi 5</h1>
 
 <p align="center">
-  <strong>Play Command & Conquer: Generals & Zero Hour on macOS, Linux, and Windows — with native cross-platform online multiplayer.</strong>
+  <strong>Command & Conquer: Generals Zero Hour, running natively on a Raspberry Pi 5.</strong>
 </p>
 
 <p align="center">
-  <a href="https://deepwiki.com/fbraz3/GeneralsGameCode"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-  <a href="https://github.com/fbraz3/GeneralsX/actions/workflows/ci.yml"><img src="https://github.com/fbraz3/GeneralsX/actions/workflows/ci.yml/badge.svg?branch=main" alt="GeneralsX CI"></a>
-  <a href="https://github.com/fbraz3/GeneralsX/releases"><img src="https://img.shields.io/github/v/release/fbraz3/GeneralsX?include_prereleases&sort=date&display_name=tag&style=flat&label=Release" alt="GitHub Release"></a>
-  <a href="https://github.com/fbraz3/GeneralsX/wiki"><img src="https://img.shields.io/badge/Wiki-Documentation-blue.svg" alt="Project Wiki"></a>
+  <a href="https://github.com/captainchapster/GeneralsX_RPI5/releases/latest"><img src="https://img.shields.io/github/v/release/captainchapster/GeneralsX_RPI5?sort=date&display_name=tag&style=flat&label=Download" alt="Latest release"></a>
+  <a href="https://github.com/captainchapster/GeneralsX_RPI5/actions/workflows/build-pi5.yml"><img src="https://github.com/captainchapster/GeneralsX_RPI5/actions/workflows/build-pi5.yml/badge.svg?branch=rpi5/phase1-aarch64" alt="Build Pi 5"></a>
+  <a href="https://github.com/fbraz3/GeneralsX"><img src="https://img.shields.io/badge/based%20on-GeneralsX-blue.svg" alt="Based on GeneralsX"></a>
 </p>
 
 ---
 
-**GeneralsX** lets you run **Command & Conquer: Generals** and **Zero Hour** natively on **macOS, Linux, and Windows**. Built on a modern open-source engine stack, it brings back smooth gameplay, seamless cross-platform online multiplayer, and full compatibility with original campaigns, mods, and replays on modern computers.
+> **This is an unofficial fork.** It is the Raspberry Pi 5 edition of [GeneralsX](https://github.com/fbraz3/GeneralsX), the Mac/Linux/Windows port of Generals and Zero Hour. It is not supported by the GeneralsX team, so please report Pi problems [here](https://github.com/captainchapster/GeneralsX_RPI5/issues), not upstream.
 
-## ✨ Highlights
+## The story
 
-- 🌐 **Cross-Play Online Multiplayer**: Native online matchmaking and lobbies powered by **GeneralsOnline (NGMP)**. Play seamlessly across **macOS, Linux, and Windows** without GameSpy, Hamachi, or VLAN tools.
-- 💻 **Native Modern Performance**: Runs natively on **macOS** (Apple Silicon), **Linux** (x86_64), and **Windows**. No legacy 32-bit baggage.
-- 🌋 **Modern Graphics**: Replaces the ancient DirectX 8 backend with Vulkan translation via DXVK for smooth performance on modern monitors and GPUs.
-- 🔊 **Updated Audio & Video**: Crystal-clear cross-platform audio (OpenAL / MiniAudio) and full video cinematics support via FFmpeg.
-- 🎯 **100% Retail Compatibility**: Full support for original singleplayer campaigns, Skirmish vs AI, replays, and community mods.
-- 📦 **Generals & Zero Hour**: Play both the base game and the expansion from a unified, modern codebase.
+It started with a simple question: could a Raspberry Pi 5 run Zero Hour? Not through an emulator or by streaming it from a PC, but natively, on the Pi's own little GPU.
 
----
+The Pi I wanted it on runs Twister OS, dressed up as Windows XP, on a 3440x1440 ultrawide behind a KVM switch. That was the right place for a game from 2003.
 
-## 🚀 Getting Started
+The answer turned out to be yes. The campaign, skirmish, save/load and the videos all work, and the game logs its own frame rate. The first full LAN match, on Victory Valley at 1024x768, averaged 35 FPS, with the slowest 1% of frames at 11 FPS. After a round of performance work (v1.1), the same Victory Valley replay holds the game's 60 FPS cap, with the slowest 1% at 43 FPS. A 25-minute match on Eastern Everglades with rain, lightning and every setting on Very High averaged 50 FPS, with the slowest 1% at 26 FPS. One evening the Pi played a LAN match against a Windows PC: two players, two bots, start to finish, without a single desync.
 
-### Download & Play
-Ready-to-run releases are available for macOS, Linux, and Windows:
+Getting there took a lot of fixes for a 64-bit ARM board that the game was never designed for, and then an installer that feels like it came off a CD in 2003. I ([@captainchapster](https://github.com/captainchapster)) built this port with [Claude Code](https://claude.com/claude-code) as my engineer. It debugged the graphics driver, chased the audio glitches and wrote the Setup wizard, while I tested every build on the real hardware.
 
-* 📦 **[Download GeneralsX Releases](https://github.com/fbraz3/GeneralsX/releases)** – Pre-built packages for macOS, Linux, and Windows
-* 📖 **[Installation & Game Data Setup Guide](https://github.com/fbraz3/GeneralsX/wiki)**
+## Install
 
-> *Note: GeneralsX is an engine recreation and requires original game data files from a legitimate copy of Command & Conquer: Generals / Zero Hour (The First Decade, EA App, Steam, or retail CDs).*
+You need:
 
-### 🌐 Cross-Platform Multiplayer
-GeneralsX includes integrated multiplayer powered by **GeneralsOnline**. Players on macOS, Linux, and Windows can host, join lobbies, and battle against each other online with zero network configuration hurdles.
+- A **Raspberry Pi 5** (tested on 8 GB) with a 64-bit desktop OS: Raspberry Pi OS, Debian bookworm or Twister OS.
+- Your own copy of **Generals** and **Zero Hour** (Steam, EA app or the original discs). Copy both game folders to a USB stick. The game files are not included.
 
----
+Then:
 
-## 📱 Ecosystem & Community Ports
+1. Plug in the USB stick with your game files.
+2. Download `GeneralsXZH-pi5-aarch64.tar.gz` from the **[latest release](https://github.com/captainchapster/GeneralsX_RPI5/releases/latest)**.
+3. Right-click it, choose **Extract Here**, open the `GeneralsXZH-pi5` folder and double-click **Setup**.
 
-The flexibility and modern foundation of GeneralsX have enabled several community-driven ports across mobile and web platforms:
+<p align="center">
+  <img src="assets/pi5-setup-wizard.png" alt="The Setup wizard finding the game files and finishing the install" width="560">
+</p>
 
-* **[Generals-Mac-iOS-iPad](https://github.com/ammaarreshi/Generals-Mac-iOS-iPad)** – iOS and iPadOS port by [@ammaarreshi](https://github.com/ammaarreshi)
-* **[Generals-Android](https://github.com/fadi-labib/Generals-Android)** – Android port by [@fadi-labib](https://github.com/fadi-labib)
-* **[wasm-generals](https://github.com/origami-ltd/wasm-generals)** – WebAssembly + WebGPU browser port by [@ebellumat](https://github.com/ebellumat) (playable at [generals.wasm.com.br](https://generals.wasm.com.br))
+Setup finds your game files, installs what it needs, copies everything with a progress bar, and adds the game to the Games menu and, if you like, the desktop. The full guide, with LAN play and troubleshooting, is in **[docs/HOWTO/RASPBERRY_PI_5.md](docs/HOWTO/RASPBERRY_PI_5.md)**.
 
----
+## What works
 
-## 🛠️ Building from Source
+| | |
+|---|---|
+| ✅ Campaign and skirmish vs AI | ✅ Save and load |
+| ✅ Music, sound effects and videos | ✅ LAN play, including against Windows PCs |
+| ✅ Widescreen monitors (with black bars) | ❌ Online play (not set up yet) |
 
-GeneralsX uses CMake with predefined presets for supported platforms:
+## What's different from GeneralsX
+
+- **64-bit ARM build**: GeneralsX targets x86-64 Linux, macOS and Windows. This fork adds an aarch64 preset and builds DXVK from source.
+- **Pi GPU support**: the Pi's V3D GPU lacks several Vulkan features DXVK expects. Small DXVK patches in [`cmake/patches/dxvk`](cmake/patches/dxvk) work around them, and the package brings its own newer Mesa driver, which only the game uses.
+- **One-click install**: a classic Setup wizard, a ready-made package built by GitHub Actions on an arm64 runner, and a clean uninstaller.
+- **Fixes found along the way**: audio, the intro order and the Microwave Tank's heat haze. They are written so they also work on the other platforms.
+
+The fork follows GeneralsX: every week a workflow merges the latest upstream changes into a pull request and builds the Pi package from it, so improvements from GeneralsX keep arriving here.
+
+## Building it yourself
+
+On a Pi 5 (or any arm64 Debian bookworm machine):
 
 ```bash
-# macOS (Apple Silicon)
-cmake --preset macos-vulkan
-cmake --build build/macos-vulkan --target z_generals
-
-# Linux (x86_64)
-cmake --preset linux64-deploy
-cmake --build build/linux64-deploy --target z_generals
+./scripts/build/linux/build-pi5-zh.sh
+./scripts/build/linux/deploy-linux-zh.sh linux-aarch64
+./scripts/build/linux/run-pi5-zh.sh
 ```
 
-For complete prerequisites, Docker workflows, and packaging guides, check the Wiki:
-- 📖 [Building on macOS Guide](https://github.com/fbraz3/GeneralsX/wiki/Building-on-macOS)
-- 📖 [Building on Linux Guide](https://github.com/fbraz3/GeneralsX/wiki/Building-on-Linux)
+See [Building it yourself](docs/HOWTO/RASPBERRY_PI_5.md#building-it-yourself) for the details.
 
----
+## Credits
 
-## 📜 Project Lineage & Credits
+This port only exists because of the people who did the hard parts first:
 
-GeneralsX stands on the shoulders of the RTS community and open-source pioneers:
+* **[GeneralsX](https://github.com/fbraz3/GeneralsX)** by [@fbraz3](https://github.com/fbraz3) and contributors, the cross-platform engine this fork is built on. If you enjoy this, consider [sponsoring GeneralsX](https://github.com/sponsors/fbraz3).
+* **[TheSuperHackers](https://github.com/TheSuperHackers/GeneralsGameCode)** for the code modernization and preservation work underneath it.
+* **[Fighter19](https://github.com/Fighter19) & [feliwir](https://github.com/feliwir)** for pioneering SDL3, DXVK and OpenAL in Zero Hour.
+* **[DXVK](https://github.com/doitsujin/dxvk)** and the **[Mesa](https://mesa3d.org/) V3DV** driver developers, for making Direct3D on a Pi possible at all.
+* **[Westwood Studios & EA](https://www.ea.com/)** for creating Command & Conquer: Generals.
 
-* **[Westwood Studios & EA](https://www.ea.com/)** for creating the Command & Conquer: Generals universe.
-* **[TheSuperHackers](https://github.com/TheSuperHackers/GeneralsGameCode)** for foundational code modernization, stability fixes, and upstream preservation.
-* **[Fighter19](https://github.com/Fighter19) & [feliwir](https://github.com/feliwir)** for early reference work pioneering SDL3, DXVK, and OpenAL in Zero Hour.
+## License
 
----
-
-## 💖 Support & Contributing
-
-- **[Sponsor on GitHub](https://github.com/sponsors/fbraz3)** – Help fund test hardware, server infrastructure, CI/CD pipelines, and active development.
-- **[Contributing Guide](CONTRIBUTING.md)** – Contributions are welcome! Check our issues and pull request guidelines before opening a PR.
-
-## 📄 License
-
-See the [LICENSE](./LICENSE.md) file for details.  
+See the [LICENSE](./LICENSE.md) file for details.
 *EA has not endorsed and does not support this product. Command & Conquer is a trademark of Electronic Arts Inc.*

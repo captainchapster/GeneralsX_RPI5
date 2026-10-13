@@ -65,6 +65,8 @@
 #include "Common/file.h"
 #include "VideoDevice/FFmpeg/FFmpegFile.h"
 
+#include <algorithm>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
@@ -91,7 +93,9 @@ MiniAudioManager::MiniAudioManager() :
 	m_lastSelectedPlaybackDevice(PROVIDER_ERROR),
 	m_binkHandle(NULL),
 	m_pref3DProvider(AsciiString::TheEmptyString),
-	m_prefSpeaker(AsciiString::TheEmptyString)
+	m_prefSpeaker(AsciiString::TheEmptyString),
+	m_decodedFilesSize(0),
+	m_decodedFileClock(0)
 {
 }
 
@@ -101,6 +105,7 @@ MiniAudioManager::~MiniAudioManager()
 	DEBUG_ASSERTCRASH(m_binkHandle == NULL, ("Leaked a Bink handle. Chuybregts"));
 	releaseHandleForBink();
 	closeDevice();
+	freeDecodedFiles();
 
 	DEBUG_ASSERTCRASH(this == TheAudio, ("Umm...\n"));
 	TheAudio = NULL;
@@ -203,6 +208,13 @@ void MiniAudioManager::reset()
 
 	AudioManager::reset();
 	stopAllAudioImmediately();
+	// GeneralsX @bugfix rpi5 11/10/2026 Drop queued requests as Miles and OpenAL do. Sounds requested
+	// while a map was torn down, such as the low power warning when the shell map or a game ended,
+	// otherwise played at the start of the next map.
+	removeAllAudioRequests();
+	// This must come after stopAllAudioImmediately() and removeAllAudioRequests(), to ensure that
+	// sounds pointing to the temporary AudioEventInfo handles are deleted before their info is deleted
+	removeLevelSpecificAudioEventInfos();
 	// GeneralsX @bugfix coolswood 18/07/2026 Restart sound groups in reset() to fix silent audio after loadGame.
 	// stopAllAudioImmediately() releases individual PlayingAudio entries but does not touch the four
 	// ma_sound_group nodes. If a prior pauseAudio() had stopped them (e.g. via the ESC menu used to pick
@@ -247,18 +259,56 @@ void MiniAudioManager::stopAudio(AudioAffect which)
 }
 
 //-------------------------------------------------------------------------------------------------
+// The sound group a playing sound was started in (see playAudioEvent).
+AudioAffect MiniAudioManager::getAudioAffect(const PlayingAudio *playing)
+{
+	const AudioEventRTS *event = playing->m_audioEventRTS.Peek();
+	const AudioEventInfo *info = event ? event->getAudioEventInfo() : NULL;
+	if (!info) {
+		return AudioAffect_Sound;
+	}
+	switch (info->m_soundType)
+	{
+	case AT_Music:
+		return AudioAffect_Music;
+	case AT_Streaming:
+		return AudioAffect_Speech;
+	default:
+		return event->isPositionalAudio() ? AudioAffect_Sound3D : AudioAffect_Sound;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix Claude 13/10/2026 Pause the sounds that are playing, as Miles does, instead of
+// stopping the whole sound groups. The game pauses its sounds while the in-game menu is open, and the
+// menu's own sounds (opening, button hover and click) start after that. In a stopped group they were
+// silent and processPlayingList() reaped them at once. Like Miles, play requests that are still
+// queued are dropped, so they do not start while the game is paused.
 void MiniAudioManager::pauseAudio(AudioAffect which)
 {
 	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
 	ScopedFPUGuard fpuGuard;
-	if (BitIsSet(which, AudioAffect_Sound))
-		ma_sound_group_stop(&m_soundGroup);
-	if (BitIsSet(which, AudioAffect_Sound3D))
-		ma_sound_group_stop(&m_sound3DGroup);
-	if (BitIsSet(which, AudioAffect_Speech))
-		ma_sound_group_stop(&m_speechGroup);
-	if (BitIsSet(which, AudioAffect_Music))
-		ma_sound_group_stop(&m_musicGroup);
+	for (std::list<PlayingAudio *>::iterator it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		PlayingAudio *playing = *it;
+		if (!playing || !playing->m_sound || playing->m_paused || !BitIsSet(which, getAudioAffect(playing))) {
+			continue;
+		}
+		if (ma_sound_is_playing(playing->m_sound)) {
+			ma_sound_stop(playing->m_sound);
+			playing->m_paused = true;
+		}
+	}
+
+	for (std::list<AudioRequest *>::iterator ait = m_audioRequests.begin(); ait != m_audioRequests.end(); ) {
+		AudioRequest *req = *ait;
+		if (req && req->m_request == AR_Play) {
+			deleteInstance(req);
+			ait = m_audioRequests.erase(ait);
+		}
+		else {
+			++ait;
+		}
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -266,6 +316,7 @@ void MiniAudioManager::resumeAudio(AudioAffect which)
 {
 	// GeneralsX @bugfix meerzulee 19/07/2026 FP env guard for audio entry point (see #215)
 	ScopedFPUGuard fpuGuard;
+	// stopAudio() stops whole groups, so make sure the groups play again too.
 	if (BitIsSet(which, AudioAffect_Sound))
 		ma_sound_group_start(&m_soundGroup);
 	if (BitIsSet(which, AudioAffect_Sound3D))
@@ -274,6 +325,15 @@ void MiniAudioManager::resumeAudio(AudioAffect which)
 		ma_sound_group_start(&m_speechGroup);
 	if (BitIsSet(which, AudioAffect_Music))
 		ma_sound_group_start(&m_musicGroup);
+
+	for (std::list<PlayingAudio *>::iterator it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		PlayingAudio *playing = *it;
+		if (!playing || !playing->m_sound || !playing->m_paused || !BitIsSet(which, getAudioAffect(playing))) {
+			continue;
+		}
+		ma_sound_start(playing->m_sound);
+		playing->m_paused = false;
+	}
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -289,6 +349,208 @@ void MiniAudioManager::stopAllAmbientsBy(Object *obj)
 //-------------------------------------------------------------------------------------------------
 void MiniAudioManager::stopAllAmbientsBy(Drawable *draw)
 {
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @performance Claude 12/10/2026 Every ma_audio_buffer the manager creates is the first
+// member of one of these, so freeAudioBuffer() can find the decoded file it plays.
+namespace
+{
+	struct DecodedFileBuffer
+	{
+		ma_audio_buffer m_buffer;
+		DecodedAudioFile *m_file;
+	};
+
+	// Decoded sound files are PCM, about four times the size of the IMA ADPCM files the retail
+	// AudioFootprintInBytes budget was made for; keep at least this much.
+	const size_t MIN_DECODED_CACHE_BYTES = 64 * 1024 * 1024;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @refactor rpi5 11/10/2026 Decode a whole file with FFmpeg into a new ma_audio_buffer
+// (moved out of playAudioEvent so startNextLoop can reuse it). Returns NULL on failure; the caller
+// owns the buffer and frees it with freeAudioBuffer().
+// GeneralsX @performance Claude 12/10/2026 The file is decoded once and cached; the buffer only
+// keeps its own play position in the shared PCM data.
+ma_audio_buffer *MiniAudioManager::decodeFileToBuffer(const AsciiString &fileToPlay)
+{
+	DecodedAudioFile *decoded = openDecodedFile(fileToPlay);
+	if (!decoded) {
+		return NULL;
+	}
+
+	DecodedFileBuffer *fileBuffer = NEW DecodedFileBuffer;
+	fileBuffer->m_file = decoded;
+	ma_audio_buffer_config abConfig = ma_audio_buffer_config_init(decoded->m_format, decoded->m_channels,
+		decoded->m_frameCount, decoded->m_pcm.data(), NULL);
+	abConfig.sampleRate = decoded->m_sampleRate;
+
+	ma_result result = ma_audio_buffer_init(&abConfig, &fileBuffer->m_buffer);
+	if (result != MA_SUCCESS) {
+		DEBUG_LOG(("MiniAudio: Failed to create audio buffer: %d for '%s'\n", result, fileToPlay.str()));
+		--decoded->m_openCount;
+		delete fileBuffer;
+		return NULL;
+	}
+	fileBuffer->m_buffer.ref.sampleRate = decoded->m_sampleRate;
+
+	return &fileBuffer->m_buffer;
+}
+
+//-------------------------------------------------------------------------------------------------
+void MiniAudioManager::freeAudioBuffer(ma_audio_buffer *buffer)
+{
+	if (!buffer) {
+		return;
+	}
+	DecodedFileBuffer *fileBuffer = reinterpret_cast<DecodedFileBuffer *>(buffer);
+	ma_audio_buffer_uninit(&fileBuffer->m_buffer);
+	--fileBuffer->m_file->m_openCount;
+	delete fileBuffer;
+}
+
+//-------------------------------------------------------------------------------------------------
+DecodedAudioFile *MiniAudioManager::openDecodedFile(const AsciiString &fileName)
+{
+	DecodedAudioFile *decoded = NULL;
+	DecodedAudioFileMap::iterator it = m_decodedFiles.find(fileName);
+	if (it != m_decodedFiles.end()) {
+		decoded = it->second;
+	}
+	else {
+		decoded = decodeFile(fileName);
+		if (!decoded) {
+			return NULL;
+		}
+		m_decodedFiles[fileName] = decoded;
+		m_decodedFilesSize += decoded->m_pcm.size();
+	}
+
+	++decoded->m_openCount;
+	decoded->m_lastUsed = ++m_decodedFileClock;
+	trimDecodedFiles();
+	return decoded;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Evicts the least recently used files that nothing is playing until the cache fits its budget.
+// Files that are playing stay, so the cache can go over budget while many sounds play.
+void MiniAudioManager::trimDecodedFiles(void)
+{
+	const size_t maxSize = std::max<size_t>(getAudioSettings()->m_maxCacheSize, MIN_DECODED_CACHE_BYTES);
+	while (m_decodedFilesSize > maxSize) {
+		DecodedAudioFileMap::iterator oldest = m_decodedFiles.end();
+		for (DecodedAudioFileMap::iterator it = m_decodedFiles.begin(); it != m_decodedFiles.end(); ++it) {
+			if (it->second->m_openCount == 0 &&
+				(oldest == m_decodedFiles.end() || it->second->m_lastUsed < oldest->second->m_lastUsed)) {
+				oldest = it;
+			}
+		}
+		if (oldest == m_decodedFiles.end()) {
+			return;
+		}
+		m_decodedFilesSize -= oldest->second->m_pcm.size();
+		delete oldest->second;
+		m_decodedFiles.erase(oldest);
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void MiniAudioManager::freeDecodedFiles(void)
+{
+	for (DecodedAudioFileMap::iterator it = m_decodedFiles.begin(); it != m_decodedFiles.end(); ++it) {
+		DEBUG_ASSERTCRASH(it->second->m_openCount == 0, ("Decoded audio file '%s' is still playing", it->first.str()));
+		delete it->second;
+	}
+	m_decodedFiles.clear();
+	m_decodedFilesSize = 0;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Decodes a whole file with FFmpeg to PCM. Returns NULL on failure.
+DecodedAudioFile *MiniAudioManager::decodeFile(const AsciiString &fileToPlay)
+{
+	// Use FFmpeg to decode the file into PCM, then feed to miniaudio.
+	// This avoids miniaudio's built-in decoders which hang on MP3 via VFS.
+	File *file = TheFileSystem->openFile(fileToPlay.str());
+	if (!file) {
+		DEBUG_LOG(("MiniAudio: Failed to open file: %s\n", fileToPlay.str()));
+		return NULL;
+	}
+
+	FFmpegFile *ffmpegFile = NEW FFmpegFile();
+	if (!ffmpegFile->open(file)) {
+		DEBUG_LOG(("MiniAudio: Failed to open FFmpeg file: %s\n", fileToPlay.str()));
+		delete ffmpegFile;
+		return NULL;
+	}
+
+	// Decode all audio frames into a buffer
+	std::vector<ma_uint8> pcmData;
+	int sampleRate = 0;
+	int channels = 0;
+	int bytesPerSample = 0;
+
+	auto onFrame = [&](AVFrame *frame, int stream_idx, int stream_type, void *user_data) {
+		if (stream_type != AVMEDIA_TYPE_AUDIO) return;
+
+		sampleRate = frame->sample_rate;
+		channels = frame->ch_layout.nb_channels;
+		bytesPerSample = av_get_bytes_per_sample(static_cast<AVSampleFormat>(frame->format));
+
+		const int frameSize = av_samples_get_buffer_size(NULL, channels, frame->nb_samples,
+			static_cast<AVSampleFormat>(frame->format), 1);
+		if (frameSize <= 0) return;
+
+		const size_t offset = pcmData.size();
+		pcmData.resize(offset + frameSize);
+		ma_uint8 *dst = pcmData.data() + offset;
+		if (av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format))) {
+			// Interleave planar audio
+			for (int s = 0; s < frame->nb_samples; s++) {
+				for (int c = 0; c < channels; c++) {
+					memcpy(dst, frame->data[c] + s * bytesPerSample, bytesPerSample);
+					dst += bytesPerSample;
+				}
+			}
+		} else {
+			memcpy(dst, frame->data[0], frameSize);
+		}
+	};
+
+	ffmpegFile->setFrameCallback(onFrame);
+	ffmpegFile->setUserData(NULL);
+
+	while (ffmpegFile->decodePacket()) {}
+
+	// Always delete ffmpegFile after decoding is complete
+	delete ffmpegFile;
+	ffmpegFile = NULL;
+
+	if (pcmData.empty() || sampleRate == 0 || bytesPerSample == 0) {
+		DEBUG_LOG(("MiniAudio: No audio data decoded from: %s\n", fileToPlay.str()));
+		return NULL;
+	}
+
+	// Map FFmpeg bytes-per-sample to miniaudio format
+	ma_format maFmt = ma_format_unknown;
+	if (bytesPerSample == 1) maFmt = ma_format_u8;
+	else if (bytesPerSample == 2) maFmt = ma_format_s16;
+	else if (bytesPerSample == 4) maFmt = ma_format_f32;
+
+	if (maFmt == ma_format_unknown) {
+		DEBUG_LOG(("MiniAudio: Unsupported format (%d bps) for: %s\n", bytesPerSample, fileToPlay.str()));
+		return NULL;
+	}
+
+	DecodedAudioFile *decoded = NEW DecodedAudioFile;
+	decoded->m_format = maFmt;
+	decoded->m_channels = channels;
+	decoded->m_sampleRate = sampleRate;
+	decoded->m_frameCount = pcmData.size() / ma_get_bytes_per_frame(maFmt, channels);
+	decoded->m_pcm.swap(pcmData);
+	return decoded;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -349,102 +611,18 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 		break;
 	}
 
-	// Use FFmpeg to decode the file into PCM, then feed to miniaudio.
-	// This avoids miniaudio's built-in decoders which hang on MP3 via VFS.
-	File *file = TheFileSystem->openFile(fileToPlay.str());
-	if (!file) {
-		DEBUG_LOG(("MiniAudio: Failed to open file: %s\n", fileToPlay.str()));
+	ma_audio_buffer *audioBuffer = decodeFileToBuffer(fileToPlay);
+	if (!audioBuffer) {
 		releasePlayingAudio(audio);
 		return;
 	}
-
-	FFmpegFile *ffmpegFile = NEW FFmpegFile();
-	if (!ffmpegFile->open(file)) {
-		DEBUG_LOG(("MiniAudio: Failed to open FFmpeg file: %s\n", fileToPlay.str()));
-		delete ffmpegFile;
-		releasePlayingAudio(audio);
-		return;
-	}
-
-	// Decode all audio frames into a buffer
-	std::vector<uint8_t> pcmData;
-	int sampleRate = 0;
-	int channels = 0;
-	int bytesPerSample = 0;
-
-	auto onFrame = [&](AVFrame *frame, int stream_idx, int stream_type, void *user_data) {
-		if (stream_type != AVMEDIA_TYPE_AUDIO) return;
-
-		sampleRate = frame->sample_rate;
-		channels = frame->ch_layout.nb_channels;
-		bytesPerSample = av_get_bytes_per_sample(static_cast<AVSampleFormat>(frame->format));
-
-		const int frameSize = av_samples_get_buffer_size(NULL, channels, frame->nb_samples,
-			static_cast<AVSampleFormat>(frame->format), 1);
-		if (frameSize <= 0) return;
-
-		if (av_sample_fmt_is_planar(static_cast<AVSampleFormat>(frame->format))) {
-			// Interleave planar audio
-			for (int s = 0; s < frame->nb_samples; s++) {
-				for (int c = 0; c < channels; c++) {
-					const uint8_t *src = frame->data[c] + s * bytesPerSample;
-					pcmData.insert(pcmData.end(), src, src + bytesPerSample);
-				}
-			}
-		} else {
-			pcmData.insert(pcmData.end(), frame->data[0], frame->data[0] + frameSize);
-		}
-	};
-
-	ffmpegFile->setFrameCallback(onFrame);
-	ffmpegFile->setUserData(NULL);
-
-	while (ffmpegFile->decodePacket()) {}
-
-	// Always delete ffmpegFile after decoding is complete
-	delete ffmpegFile;
-	ffmpegFile = NULL;
-
-	if (pcmData.empty() || sampleRate == 0 || bytesPerSample == 0) {
-		DEBUG_LOG(("MiniAudio: No audio data decoded from: %s\n", fileToPlay.str()));
-		releasePlayingAudio(audio);
-		return;
-	}
-
-	// Map FFmpeg bytes-per-sample to miniaudio format
-	ma_format maFmt = ma_format_unknown;
-	if (bytesPerSample == 1) maFmt = ma_format_u8;
-	else if (bytesPerSample == 2) maFmt = ma_format_s16;
-	else if (bytesPerSample == 4) maFmt = ma_format_f32;
-
-	if (maFmt == ma_format_unknown) {
-		DEBUG_LOG(("MiniAudio: Unsupported format (%d bps) for: %s\n", bytesPerSample, fileToPlay.str()));
-		releasePlayingAudio(audio);
-		return;
-	}
-
-	// Create audio buffer — init_copy copies data into internal storage
-	// so it's safe when pcmData goes out of scope after this function returns.
-	ma_audio_buffer *audioBuffer = (ma_audio_buffer *)malloc(sizeof(ma_audio_buffer));
-	ma_audio_buffer_config abConfig = ma_audio_buffer_config_init(maFmt, channels,
-		pcmData.size() / ma_get_bytes_per_frame(maFmt, channels),
-		pcmData.data(), NULL);
-
-	ma_result result = ma_audio_buffer_init_copy(&abConfig, audioBuffer);
-	if (result != MA_SUCCESS) {
-		DEBUG_LOG(("MiniAudio: Failed to create audio buffer: %d for '%s'\n", result, fileToPlay.str()));
-		free(audioBuffer);
-		releasePlayingAudio(audio);
-		return;
-	}
-	audioBuffer->ref.sampleRate = sampleRate;
+	ma_result result;
 
 	ma_sound *sound = (ma_sound *)malloc(sizeof(ma_sound));
 	result = ma_sound_init_from_data_source(&m_engine, audioBuffer, flags, groupToUse, sound);
 	if (result != MA_SUCCESS) {
 		DEBUG_LOG(("MiniAudio: Failed to init sound: %d for '%s'\n", result, fileToPlay.str()));
-		ma_audio_buffer_uninit(audioBuffer);
-		free(audioBuffer);
+		freeAudioBuffer(audioBuffer);
 		free(sound);
 		releasePlayingAudio(audio);
 		return;
@@ -453,6 +631,7 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 	// Assign to PlayingAudio before any early returns below
 	audio->m_sound = sound;
 	audio->m_audioBuffer = audioBuffer;
+	audio->m_currentBuffer = audioBuffer;
 
 	switch (info->m_soundType)
 	{
@@ -465,6 +644,12 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 		audio->m_type = PAT_Stream;
 		if ((info->m_soundType == AT_Streaming) && event->getUninterruptible()) {
 			setDisallowSpeech(TRUE);
+		}
+		// GeneralsX @bugfix rpi5 11/10/2026 Loop music until it is stopped, as Miles does with
+		// INFINITE_LOOP_COUNT. Map scripts move to the next track via hasMusicTrackCompleted();
+		// without looping a track played once and the music then stayed silent.
+		if (info->m_soundType == AT_Music) {
+			ma_sound_set_looping(sound, MA_TRUE);
 		}
 		break;
 	}
@@ -490,6 +675,14 @@ void MiniAudioManager::playAudioEvent(AudioRequest *req)
 		else {
 			audio->m_type = PAT_Sample;
 
+		}
+
+		// GeneralsX @bugfix rpi5 11/10/2026 Loop endless single-file sound effects inside miniaudio
+		// so the loop point is sample accurate. Other looping effects (several files, a delay
+		// between loops or a fixed loop count) are chained from processPlayingList() via queueNextLoop().
+		if (BitIsSet(info->m_control, AC_LOOP) && info->m_loopCount == 0 &&
+			info->m_sounds.size() == 1 && info->m_delayMax <= 0) {
+			ma_sound_set_looping(sound, MA_TRUE);
 		}
 		break;
 	}
@@ -601,9 +794,16 @@ void MiniAudioManager::releaseMiniAudioHandles(PlayingAudio *release)
 		free(release->m_sound);
 		release->m_sound = NULL;
 	}
+	if (release->m_currentBuffer && release->m_currentBuffer != release->m_audioBuffer) {
+		freeAudioBuffer(release->m_currentBuffer);
+	}
+	release->m_currentBuffer = NULL;
+	if (release->m_queuedBuffer) {
+		freeAudioBuffer(release->m_queuedBuffer);
+		release->m_queuedBuffer = NULL;
+	}
 	if (release->m_audioBuffer) {
-		ma_audio_buffer_uninit(release->m_audioBuffer);
-		free(release->m_audioBuffer);
+		freeAudioBuffer(release->m_audioBuffer);
 		release->m_audioBuffer = NULL;
 	}
 	release->m_type = PAT_INVALID;
@@ -753,6 +953,19 @@ Bool MiniAudioManager::isMusicPlaying(void) const
 //-------------------------------------------------------------------------------------------------
 Bool MiniAudioManager::hasMusicTrackCompleted(const AsciiString &trackName, Int numberOfTimes) const
 {
+	// GeneralsX @bugfix rpi5 11/10/2026 Mirror Miles: true once the playing music track has
+	// looped at least numberOfTimes.
+	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		PlayingAudio *playing = *it;
+		if (!playing || playing->m_requestStop || !playing->m_audioEventRTS)
+			continue;
+		const AudioEventInfo *info = playing->m_audioEventRTS->getAudioEventInfo();
+		if (!info || info->m_soundType != AT_Music)
+			continue;
+		if (playing->m_audioEventRTS->getEventName() != trackName)
+			continue;
+		return playing->m_loopsCompleted >= numberOfTimes;
+	}
 	return FALSE;
 }
 
@@ -901,14 +1114,7 @@ void MiniAudioManager::notifyOfAudioCompletion(UnsignedInt audioCompleted, Unsig
 	if (getDisallowSpeech() && playing->m_audioEventRTS->getAudioEventInfo()->m_soundType == AT_Streaming)
 		setDisallowSpeech(FALSE);
 
-	if (playing->m_audioEventRTS->getAudioEventInfo()->m_control & AC_LOOP) {
-		if (playing->m_audioEventRTS->getNextPlayPortion() == PP_Attack)
-			playing->m_audioEventRTS->setNextPlayPortion(PP_Sound);
-		if (playing->m_audioEventRTS->getNextPlayPortion() == PP_Sound) {
-			playing->m_audioEventRTS->decreaseLoopCount();
-			if (startNextLoop(playing)) return;
-		}
-	}
+	continueLoopingSound(playing);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1068,7 +1274,12 @@ AudioEventRTS *MiniAudioManager::findLowestPrioritySound(AudioEventRTS *event)
 	AudioEventRTS *lowestPriorityEvent = NULL;
 	AudioPriority lowestPriority = AP_LOWEST;
 
+	// GeneralsX @bugfix rpi5 11/10/2026 Only compete with sounds of the same channel type, as
+	// Miles and OpenAL do with their separate 2D/3D lists. m_playingSounds also holds music and
+	// speech streams, which were being killed to make room for sound effects.
+	const PlayingAudioType channelType = event->isPositionalAudio() ? PAT_3DSample : PAT_Sample;
 	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
+		if ((*it)->m_type != channelType) continue;
 		AudioEventRTS *itEvent = (*it)->m_audioEventRTS.Peek();
 		if (!itEvent) continue;
 		const AudioEventInfo *itInfo = itEvent->getAudioEventInfo();
@@ -1091,8 +1302,11 @@ Bool MiniAudioManager::isPlayingLowerPriority(AudioEventRTS *event) const
 	AudioPriority priority = event->getAudioEventInfo()->m_priority;
 	if (priority == AP_LOWEST) return false;
 
+	// GeneralsX @bugfix rpi5 11/10/2026 Never pick a music or speech stream as the handle to
+	// kill; see findLowestPrioritySound().
+	const PlayingAudioType channelType = event->isPositionalAudio() ? PAT_3DSample : PAT_Sample;
 	for (auto it = m_playingSounds.begin(); it != m_playingSounds.end(); ++it) {
-		if (!(*it)->m_audioEventRTS) continue;
+		if ((*it)->m_type != channelType || !(*it)->m_audioEventRTS) continue;
 		const AudioEventInfo *info = (*it)->m_audioEventRTS->getAudioEventInfo();
 		if (info && info->m_priority < priority) {
 			event->setHandleToKill((*it)->m_audioEventRTS->getPlayingHandle());
@@ -1205,11 +1419,50 @@ void MiniAudioManager::processPlayingList(void)
 			continue;
 		}
 
-		// Check if sound has finished playing
-		if (playing->m_sound && !ma_sound_is_playing(playing->m_sound)) {
+		advanceQueuedLoop(playing);
+
+		// Check if sound has finished playing; paused sounds have not
+		if (playing->m_sound && !playing->m_paused && !ma_sound_is_playing(playing->m_sound)) {
+			// GeneralsX @bugfix rpi5 11/10/2026 Start the next loop of a looping sound effect, as
+			// the Miles completion callback and OpenAL's polling do. Without this, looping sounds
+			// such as the Particle Cannon beam stopped after their first pass.
+			if (playing->m_type != PAT_Stream && continueLoopingSound(playing)) {
+				++it;
+				continue;
+			}
 			it = m_playingSounds.erase(it);
 			releasePlayingAudio(playing);
 			continue;
+		}
+
+		queueNextLoop(playing);
+
+		// GeneralsX @bugfix rpi5 11/10/2026 Count music loops for hasMusicTrackCompleted(). Map
+		// scripts react to a completed track by fading it out and starting the next one. Counting
+		// at the wrap made that fade play over the start of the next loop, so the track was heard
+		// starting again. Miles counts when its stream reader wraps, ahead of playback; here a pass
+		// counts once what is left is no longer than the fade, so the fade covers the track's end.
+		// A wrap still counts if the early check missed it.
+		if (playing->m_type == PAT_Stream && playing->m_sound && ma_sound_is_looping(playing->m_sound)) {
+			ma_uint64 cursor = 0;
+			ma_uint64 length = 0;
+			ma_uint32 sampleRate = 0;
+			if (ma_sound_get_cursor_in_pcm_frames(playing->m_sound, &cursor) == MA_SUCCESS &&
+				ma_sound_get_length_in_pcm_frames(playing->m_sound, &length) == MA_SUCCESS &&
+				ma_sound_get_data_format(playing->m_sound, NULL, NULL, &sampleRate, NULL, 0) == MA_SUCCESS) {
+				const Real leadMs = getAudioSettings()->m_fadeAudioFrames * MSEC_PER_LOGICFRAME_REAL + 500.0f;
+				const ma_uint64 leadFrames = (ma_uint64)(leadMs * sampleRate / 1000.0f);
+				if (cursor < playing->m_lastCursor) {
+					if (!playing->m_loopCountedEarly)
+						++playing->m_loopsCompleted;
+					playing->m_loopCountedEarly = false;
+				}
+				else if (!playing->m_loopCountedEarly && length > leadFrames && length - cursor <= leadFrames) {
+					++playing->m_loopsCompleted;
+					playing->m_loopCountedEarly = true;
+				}
+				playing->m_lastCursor = cursor;
+			}
 		}
 
 		if (m_volumeHasChanged) {
@@ -1362,9 +1615,9 @@ void MiniAudioManager::closeAnySamplesUsingFile(const void *fileToClose)
 Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 {
 	if (looping->m_requestStop) return false;
-	if (!looping->m_audioEventRTS->hasMoreLoops()) return false;
-
-	looping->m_audioEventRTS->generateFilename();
+	// prepareNextLoop() has already counted this loop and picked its file.
+	looping->m_nextLoopPrepared = false;
+	looping->m_queueFailed = false;
 
 	if (looping->m_audioEventRTS->getDelay() > MSEC_PER_LOGICFRAME_REAL) {
 		looping->m_requestStop = true;
@@ -1376,26 +1629,132 @@ Bool MiniAudioManager::startNextLoop(PlayingAudio *looping)
 		return true;
 	}
 
-	// Re-initialize the sound from the new file
+	// GeneralsX @bugfix rpi5 11/10/2026 Decode the next file through FFmpeg like playAudioEvent()
+	// does. ma_sound_init_from_file() cannot read from the game's .big archives, and it re-used
+	// the old ma_sound without releasing the old audio buffer.
+	// A buffer queued by queueNextLoop() that could not be chained (or was chained too late) is used
+	// as it is.
+	ma_audio_buffer *buffer = looping->m_queuedBuffer;
+	looping->m_queuedBuffer = NULL;
+	if (!buffer)
+		buffer = decodeFileToBuffer(looping->m_audioEventRTS->getFilename());
+	if (!buffer) return false;
+
+	const Bool is3D = (looping->m_type == PAT_3DSample);
+	ma_sound *sound = (ma_sound *)malloc(sizeof(ma_sound));
+	ma_result result = ma_sound_init_from_data_source(&m_engine, buffer,
+		is3D ? 0 : (MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH),
+		is3D ? &m_sound3DGroup : &m_soundGroup, sound);
+	if (result != MA_SUCCESS) {
+		freeAudioBuffer(buffer);
+		free(sound);
+		return false;
+	}
+
+	if (is3D && looping->m_sound) {
+		ma_sound_set_min_distance(sound, ma_sound_get_min_distance(looping->m_sound));
+		ma_sound_set_max_distance(sound, ma_sound_get_max_distance(looping->m_sound));
+		ma_sound_set_position(sound, ma_sound_get_position(looping->m_sound).x,
+			ma_sound_get_position(looping->m_sound).y, ma_sound_get_position(looping->m_sound).z);
+	}
+
 	if (looping->m_sound) {
 		ma_sound_uninit(looping->m_sound);
+		free(looping->m_sound);
 	}
-
-	AsciiString fileToPlay = looping->m_audioEventRTS->getFilename();
-	ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_PITCH;
-	if (looping->m_type == PAT_3DSample) flags = 0;
-
-	ma_result result = ma_sound_init_from_file(&m_engine, fileToPlay.str(), flags,
-		(looping->m_type == PAT_3DSample) ? &m_sound3DGroup : &m_soundGroup,
-		NULL, looping->m_sound);
-
-	if (result == MA_SUCCESS) {
-		// GeneralsX @bugfix Mr. Meeseeks 19/06/2026 - Initialize loop volume using adjustPlayingVolume
-		adjustPlayingVolume(looping);
-		ma_sound_start(looping->m_sound);
-		return true;
+	if (looping->m_currentBuffer && looping->m_currentBuffer != looping->m_audioBuffer) {
+		freeAudioBuffer(looping->m_currentBuffer);
 	}
-	return false;
+	if (looping->m_audioBuffer) {
+		freeAudioBuffer(looping->m_audioBuffer);
+	}
+	looping->m_sound = sound;
+	looping->m_audioBuffer = buffer;
+	looping->m_currentBuffer = buffer;
+
+	// GeneralsX @bugfix Mr. Meeseeks 19/06/2026 - Initialize loop volume using adjustPlayingVolume
+	adjustPlayingVolume(looping);
+	ma_sound_start(looping->m_sound);
+	return true;
+}
+
+//-------------------------------------------------------------------------------------------------
+Bool MiniAudioManager::continueLoopingSound(PlayingAudio *playing)
+{
+	if (!prepareNextLoop(playing)) return false;
+	return startNextLoop(playing);
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Count the next loop of a looping sound effect and pick its
+// file, following the Miles portion and loop count rules. Returns false when no loop follows.
+// Runs once per loop, either when the next loop is queued ahead of time or when the sound ends.
+Bool MiniAudioManager::prepareNextLoop(PlayingAudio *playing)
+{
+	if (playing->m_nextLoopPrepared) return true;
+	if (playing->m_requestStop || !playing->m_audioEventRTS) return false;
+	const AudioEventInfo *info = playing->m_audioEventRTS->getAudioEventInfo();
+	if (!info || !BitIsSet(info->m_control, AC_LOOP)) return false;
+
+	if (playing->m_audioEventRTS->getNextPlayPortion() == PP_Attack)
+		playing->m_audioEventRTS->setNextPlayPortion(PP_Sound);
+	if (playing->m_audioEventRTS->getNextPlayPortion() != PP_Sound) return false;
+
+	playing->m_audioEventRTS->decreaseLoopCount();
+	if (!playing->m_audioEventRTS->hasMoreLoops()) return false;
+
+	playing->m_audioEventRTS->generateFilename();
+	playing->m_nextLoopPrepared = true;
+	return true;
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Decode the next loop of a looping sound effect while the
+// current one plays and chain it after the current buffer, so miniaudio moves on to it without a
+// gap. Restarting from processPlayingList() once the sound had ended left a pause of up to a frame
+// plus the decode time between loops, which was audible on engine loops such as jets. Loops with a
+// delay between them, and files whose format differs, still restart through startNextLoop().
+void MiniAudioManager::queueNextLoop(PlayingAudio *playing)
+{
+	if (playing->m_type == PAT_Stream || !playing->m_sound || !playing->m_currentBuffer) return;
+	if (playing->m_queuedBuffer || playing->m_queueFailed || ma_sound_is_looping(playing->m_sound)) return;
+	if (!prepareNextLoop(playing)) return;
+	if (playing->m_audioEventRTS->getDelay() > MSEC_PER_LOGICFRAME_REAL) return;
+
+	ma_audio_buffer *next = decodeFileToBuffer(playing->m_audioEventRTS->getFilename());
+	if (!next) {
+		playing->m_queueFailed = true;
+		return;
+	}
+	playing->m_queuedBuffer = next;
+
+	ma_format curFormat, nextFormat;
+	ma_uint32 curChannels, nextChannels, curRate, nextRate;
+	if (ma_data_source_get_data_format(playing->m_currentBuffer, &curFormat, &curChannels, &curRate, NULL, 0) != MA_SUCCESS ||
+		ma_data_source_get_data_format(next, &nextFormat, &nextChannels, &nextRate, NULL, 0) != MA_SUCCESS ||
+		curFormat != nextFormat || curChannels != nextChannels || curRate != nextRate) {
+		return;
+	}
+	// The audio thread reads this link when it reaches the end of the current buffer. If it got
+	// there first, the sound ends and startNextLoop() plays the queued buffer instead.
+	ma_data_source_set_next(playing->m_currentBuffer, next);
+}
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Once miniaudio has moved on to the queued loop, free the
+// buffer it finished (the chain head stays until the sound is released) so the next loop can be
+// queued.
+void MiniAudioManager::advanceQueuedLoop(PlayingAudio *playing)
+{
+	if (!playing->m_queuedBuffer || !playing->m_audioBuffer) return;
+	if (ma_data_source_get_current(playing->m_audioBuffer) != playing->m_queuedBuffer) return;
+
+	if (playing->m_currentBuffer && playing->m_currentBuffer != playing->m_audioBuffer) {
+		freeAudioBuffer(playing->m_currentBuffer);
+	}
+	playing->m_currentBuffer = playing->m_queuedBuffer;
+	playing->m_queuedBuffer = NULL;
+	playing->m_nextLoopPrepared = false;
 }
 
 //-------------------------------------------------------------------------------------------------

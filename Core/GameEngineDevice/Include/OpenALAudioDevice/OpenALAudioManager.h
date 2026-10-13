@@ -140,6 +140,7 @@ public:
 
 	virtual void processRequestList(void);
 	virtual void processPlayingList(void);
+	Bool restartMusicStream(PlayingAudio* playing); ///< GeneralsX @bugfix rpi5 11/10/2026 loop music streams
 	virtual void processFadingList(void);
 	virtual void processStoppedList(void);
 

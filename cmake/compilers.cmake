@@ -23,6 +23,12 @@ else()
     set(IS_VS6_BUILD FALSE)
 endif()
 
+# GeneralsX @build rpi5 11/10/2026 char is unsigned by default on ARM Linux, but the engine
+# was written for x86/MSVC where it is signed. Keep x86 semantics (Apple arm64 is already signed).
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|arm.*)$")
+    add_compile_options(-fsigned-char)
+endif()
+
 # Make release builds have debug information too.
 if(MSVC)
     # Create PDB for Release as long as debug info was generated during compile.
@@ -57,6 +63,15 @@ if (NOT IS_VS6_BUILD)
         # Upstream reference: Okladnoj, PR #2670
         # https://github.com/TheSuperHackers/GeneralsGameCode/pull/2670
         add_compile_options(-ffp-contract=off)
+
+        # GeneralsX @performance Claude 12/10/2026 Code generation for a specific CPU, such as
+        # -mcpu=cortex-a76 for the Raspberry Pi 5 (linux-aarch64 preset). DXVK built from source
+        # (cmake/dx8.cmake) gets the same flags. Leave empty for builds that must run on any CPU.
+        set(SAGE_CPU_FLAGS "" CACHE STRING "Extra compiler flags for the target CPU")
+        if(SAGE_CPU_FLAGS)
+            separate_arguments(SAGE_CPU_FLAGS_LIST UNIX_COMMAND "${SAGE_CPU_FLAGS}")
+            add_compile_options(${SAGE_CPU_FLAGS_LIST})
+        endif()
     endif()
 else()
     if(RTS_BUILD_OPTION_VC6_FULL_DEBUG)

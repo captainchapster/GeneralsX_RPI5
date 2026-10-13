@@ -152,6 +152,7 @@ public:
 	void incrementRenderedObjectCount() { m_renderedObjectCount++; }
 
 	Bool skipCurrentIntroStage();
+	Bool isIntroPlaying() const;
 
 	static Bool isMovieAbortRequested();
 

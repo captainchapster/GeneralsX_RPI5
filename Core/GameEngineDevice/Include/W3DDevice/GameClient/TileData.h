@@ -51,19 +51,32 @@ typedef struct {
 // LEGACY_TILE_PIXEL_EXTENT (see WorldHeightMap.cpp) is the pre-patch 64px grid cell
 // size that unmodified base/custom-map TGAs are still packed in; the loader detects
 // and nearest-neighbor upscales those on read so they keep working unmodified.
+// GeneralsX @build rpi5 11/10/2026 RTS_RETAIL_TERRAIN_TILES (CMake RTS_BUILD_OPTION_HD_TERRAIN_TILES=OFF)
+// restores the retail 64px tiles and 2048px atlas for GPUs whose maximum texture size
+// is 4096 (Raspberry Pi 5 V3D), where the 8192px HD atlas cannot be created.
+#ifdef RTS_RETAIL_TERRAIN_TILES
+#define TILE_PIXEL_EXTENT 64
+#else
 #define TILE_PIXEL_EXTENT 256
+#endif
 #define TILE_BYTES_PER_PIXEL 4
 #define DATA_LEN_BYTES TILE_PIXEL_EXTENT*TILE_PIXEL_EXTENT*TILE_BYTES_PER_PIXEL
 #define DATA_LEN_PIXELS TILE_PIXEL_EXTENT*TILE_PIXEL_EXTENT
-#define TILE_PIXEL_EXTENT_MIP1 128
-#define TILE_PIXEL_EXTENT_MIP2 64
-#define TILE_PIXEL_EXTENT_MIP3 32
-#define TILE_PIXEL_EXTENT_MIP4 16
-#define TILE_PIXEL_EXTENT_MIP5 8
-#define TILE_PIXEL_EXTENT_MIP6 4
-#define TILE_PIXEL_EXTENT_MIP7 2
-#define TILE_PIXEL_EXTENT_MIP8 1
+// Each mip level is half its parent, clamped at 1x1 (with 64px tiles, levels 7 and 8 stay 1x1).
+#define TILE_PIXEL_EXTENT_MIP(level) ((TILE_PIXEL_EXTENT >> (level)) > 0 ? (TILE_PIXEL_EXTENT >> (level)) : 1)
+#define TILE_PIXEL_EXTENT_MIP1 TILE_PIXEL_EXTENT_MIP(1)
+#define TILE_PIXEL_EXTENT_MIP2 TILE_PIXEL_EXTENT_MIP(2)
+#define TILE_PIXEL_EXTENT_MIP3 TILE_PIXEL_EXTENT_MIP(3)
+#define TILE_PIXEL_EXTENT_MIP4 TILE_PIXEL_EXTENT_MIP(4)
+#define TILE_PIXEL_EXTENT_MIP5 TILE_PIXEL_EXTENT_MIP(5)
+#define TILE_PIXEL_EXTENT_MIP6 TILE_PIXEL_EXTENT_MIP(6)
+#define TILE_PIXEL_EXTENT_MIP7 TILE_PIXEL_EXTENT_MIP(7)
+#define TILE_PIXEL_EXTENT_MIP8 TILE_PIXEL_EXTENT_MIP(8)
+#ifdef RTS_RETAIL_TERRAIN_TILES
+#define TEXTURE_WIDTH 2048
+#else
 #define TEXTURE_WIDTH 8192 // GeneralsX @feature mrkinglollipop 11/07/2026 Bumps atlas TEXTURE_WIDTH 2048->8192 (was 2048). MoltenVK/Metal cap is 16384.
+#endif
 
 /** This class holds the bitmap data from the .tga texture files.  It is used to
 create the D3D texture in the game and 3d windows, and to create DIB data for the

@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <algorithm>
 #include <random>
-#include <format>
 #include <string>
 
 #ifdef min
@@ -291,17 +290,18 @@ void FetchMOTD() {
     s_bFetchingMOTD = false;
 }
 
+// GeneralsX @build rpi5 11/10/2026 Build URLs without std::format, which libstdc++ only ships
+// from GCC 13 (Debian 12 / Raspberry Pi OS have GCC 12).
 std::string GetAPIEndpoint(const char* szEndpoint) {
-    return std::format("{}/env/{}/contract/" NGMP_CONTRACT_VERSION "/{}",
-        GetServerRESTEndpoint(), GetServerEnv(), szEndpoint);
+    return GetServerRESTEndpoint() + "/env/" + GetServerEnv() + "/contract/" NGMP_CONTRACT_VERSION "/" + szEndpoint;
 }
 
 std::string GetBrowserLoginURL(const std::string& gamecode) {
-    return std::format("{}/login/?gamecode={}", GetWebPortalURL(), gamecode);
+    return GetWebPortalURL() + "/login/?gamecode=" + gamecode;
 }
 
 std::string GetMatchViewURL(uint64_t matchId) {
-    return std::format("{}/viewmatch?match={}", GetWebPortalURL(), matchId);
+    return GetWebPortalURL() + "/viewmatch?match=" + std::to_string(matchId);
 }
 
 // GeneralsX @bugfix fbraz3 03/09/2026 Generate UUIDv4 fallback gamecode using OS entropy with CSPRNG validation
@@ -346,12 +346,14 @@ std::string GenerateGamecode() {
     // Set variant to RFC 4122 (10xx): clk_seq_hi_res [bits 6-7] = 10b
     part2 = (part2 & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
 
-    return std::format("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        static_cast<uint32_t>(part1 >> 32),
-        static_cast<uint16_t>((part1 >> 16) & 0xFFFF),
-        static_cast<uint16_t>(part1 & 0xFFFF),
-        static_cast<uint16_t>(part2 >> 48),
-        static_cast<uint64_t>(part2 & 0xFFFFFFFFFFFFULL));
+    char szGamecode[37];
+    snprintf(szGamecode, sizeof(szGamecode), "%08x-%04x-%04x-%04x-%012llx",
+        static_cast<unsigned int>(part1 >> 32),
+        static_cast<unsigned int>((part1 >> 16) & 0xFFFF),
+        static_cast<unsigned int>(part1 & 0xFFFF),
+        static_cast<unsigned int>(part2 >> 48),
+        static_cast<unsigned long long>(part2 & 0xFFFFFFFFFFFFULL));
+    return std::string(szGamecode);
 }
 
 std::string UnicodeToUTF8(const UnicodeString& ustr) {

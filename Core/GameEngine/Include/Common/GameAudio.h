@@ -240,6 +240,10 @@ class AudioManager : public SubsystemInterface
 		virtual void setVolume( Real volume, AudioAffect whichToAffect );
 		virtual Real getVolume( AudioAffect whichToGet );
 
+		// GeneralsX @bugfix rpi5 11/10/2026 Silence music and sound effects while the intro movies play
+		// (see GameClient).
+		void setGameAudioHeld( Bool held );
+
 		// To get a more 3-D feeling from the universe, we adjust the volume of the 3-D samples based
 		// on zoom.
 		virtual void set3DVolumeAdjustment( Real volumeAdjustment );
@@ -349,6 +353,7 @@ class AudioManager : public SubsystemInterface
 		Real m_scriptSpeechVolume;
 
 		Real m_systemMusicVolume;
+		Bool m_gameAudioHeld;
 		Real m_systemSoundVolume;
 		Real m_systemSound3DVolume;
 		Real m_systemSpeechVolume;

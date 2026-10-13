@@ -8,13 +8,16 @@ set -e
 # GeneralsX @bugfix BenderAI 14/03/2026 Resolve repo root and base-game runtime paths after script reorganization.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-BUILD_DIR="${PROJECT_ROOT}/build/linux64-deploy"
+# GeneralsX @build rpi5 11/10/2026 Optional preset argument (e.g. linux-aarch64 on Raspberry Pi 5)
+PRESET="${1:-linux64-deploy}"
+BUILD_DIR="${PROJECT_ROOT}/build/${PRESET}"
 DXVK_LIB_DIR="${BUILD_DIR}/_deps/dxvk-src/lib"
 SDL3_LIB_DIR="${BUILD_DIR}/_deps/sdl3-build"
 SDL3_IMAGE_LIB_DIR="${BUILD_DIR}/_deps/sdl3_image-build"
 GAMESPY_LIB="${BUILD_DIR}/libgamespy.so"
-FFMPEG_LIB_DIR="/usr/lib/x86_64-linux-gnu"
-FFMPEG_DEP_LIB_DIR="/lib/x86_64-linux-gnu"
+MULTIARCH="$(gcc -print-multiarch 2>/dev/null || echo "$(uname -m)-linux-gnu")"
+FFMPEG_LIB_DIR="/usr/lib/${MULTIARCH}"
+FFMPEG_DEP_LIB_DIR="/lib/${MULTIARCH}"
 RUNTIME_DIR="${HOME}/GeneralsX/Generals"
 # Note: CMakeLists.txt uses OUTPUT_NAME GeneralsX on Linux (see Generals/Code/Main/CMakeLists.txt)
 BINARY_SRC="${BUILD_DIR}/Generals/GeneralsX"

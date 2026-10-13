@@ -116,6 +116,7 @@
 #include "sortingrenderer.h"
 #include "WWLib/thread.h"
 #include "WWLib/cpudetect.h"
+#include "WWLib/frametime.h"
 #include "dx8texman.h"
 #include "animatedsoundmgr.h"
 #include "static_sort_list.h"
@@ -1119,6 +1120,8 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
 
 	{
 		WWPROFILE("IRenderBackend::End_Scene");
+		// GeneralsX @feature Claude 12/10/2026 Time the end of the scene for the GENERALSX_FPS_LOG frame breakdown.
+		FrameTime::Scope presentTime(FrameTime::PART_PRESENT);
 		Get_Render_Backend()->End_Scene(flip_frame);
 	}
 

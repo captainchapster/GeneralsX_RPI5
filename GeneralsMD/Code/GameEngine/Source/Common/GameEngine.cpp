@@ -111,6 +111,7 @@
 #include "GameNetwork/GameSpy/GameResultsThread.h"
 
 #include "Common/version.h"
+#include "WWLib/frametime.h"
 
 
 //-------------------------------------------------------------------------------------------------
@@ -1028,18 +1029,27 @@ void GameEngine::update()
 
 			/// @todo Move audio init, update, etc, into GameClient update
 
-			TheAudio->UPDATE();
-			TheGameClient->UPDATE();
+			// GeneralsX @feature Claude 12/10/2026 Time the audio, client and network updates for the GENERALSX_FPS_LOG frame breakdown.
+			{
+				FrameTime::Scope audioTime(FrameTime::PART_AUDIO);
+				TheAudio->UPDATE();
+			}
+			{
+				FrameTime::Scope clientTime(FrameTime::PART_CLIENT);
+				TheGameClient->UPDATE();
+			}
 			TheMessageStream->propagateMessages();
 
 			if (TheNetwork != nullptr)
 			{
+				FrameTime::Scope networkTime(FrameTime::PART_NETWORK);
 				TheNetwork->UPDATE();
 			}
 
 #ifdef SAGE_USE_NGMP
 			if (!TheGlobalData->m_headless)
 			{
+				FrameTime::Scope onlineTime(FrameTime::PART_NETWORK);
 				NGMP_OnlineServicesManager::getInstance().update();
 			}
 #endif
@@ -1048,7 +1058,11 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
-			TheGameLogic->UPDATE();
+			{
+				// GeneralsX @feature Claude 12/10/2026 Time the simulation for the GENERALSX_FPS_LOG frame breakdown.
+				FrameTime::Scope logicTime(FrameTime::PART_LOGIC);
+				TheGameLogic->UPDATE();
+			}
 
 			if (!TheFramePacer->isTimeFrozen())
 			{

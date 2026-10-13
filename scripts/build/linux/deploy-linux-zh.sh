@@ -8,13 +8,16 @@ set -e
 # GeneralsX @bugfix BenderAI 09/03/2026 Resolve repository root correctly from scripts/build/linux.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-BUILD_DIR="${PROJECT_ROOT}/build/linux64-deploy"
+# GeneralsX @build rpi5 11/10/2026 Optional preset argument (e.g. linux-aarch64 on Raspberry Pi 5)
+PRESET="${1:-linux64-deploy}"
+BUILD_DIR="${PROJECT_ROOT}/build/${PRESET}"
 DXVK_LIB_DIR="${BUILD_DIR}/_deps/dxvk-src/lib"
 SDL3_LIB_DIR="${BUILD_DIR}/_deps/sdl3-build"
 SDL3_IMAGE_LIB_DIR="${BUILD_DIR}/_deps/sdl3_image-build"
 GAMESPY_LIB="${BUILD_DIR}/libgamespy.so"
-FFMPEG_LIB_DIR="/usr/lib/x86_64-linux-gnu"
-FFMPEG_DEP_LIB_DIR="/lib/x86_64-linux-gnu"
+MULTIARCH="$(gcc -print-multiarch 2>/dev/null || echo "$(uname -m)-linux-gnu")"
+FFMPEG_LIB_DIR="/usr/lib/${MULTIARCH}"
+FFMPEG_DEP_LIB_DIR="/lib/${MULTIARCH}"
 # GeneralsX @bugfix BenderAI 01/04/2026 Align deploy runtime selection with launcher logic by preferring the directory that contains .big assets.
 PREFERRED_RUNTIME_DIR="${HOME}/GeneralsX/GeneralsZH"
 LEGACY_RUNTIME_DIR="${HOME}/GeneralsX/GeneralsMD"
@@ -31,6 +34,10 @@ elif [[ -d "${PREFERRED_RUNTIME_DIR}" ]]; then
 elif [[ -d "${LEGACY_RUNTIME_DIR}" ]]; then
     RUNTIME_DIR="${LEGACY_RUNTIME_DIR}"
     echo "INFO: No .big assets found; using existing legacy runtime ${LEGACY_RUNTIME_DIR}"
+fi
+# GeneralsX @build rpi5 12/10/2026 Allow deploying into any directory (used to stage the Pi 5 package)
+if [[ -n "${GENERALSX_DEPLOY_DIR:-}" ]]; then
+    RUNTIME_DIR="${GENERALSX_DEPLOY_DIR}"
 fi
 # Note: CMakeLists.txt uses OUTPUT_NAME GeneralsXZH on Linux (see GeneralsMD/Code/Main/CMakeLists.txt)
 BINARY_SRC="${BUILD_DIR}/GeneralsMD/GeneralsXZH"

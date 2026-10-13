@@ -44,6 +44,12 @@ struct PlayingAudio
 	ALuint m_bufferHandle = 0;
 	Bool m_requestStop;
 	Int m_framesFaded;
+	// GeneralsX @bugfix rpi5 11/10/2026 Completed loops of a music stream, for hasMusicTrackCompleted()
+	Int m_loopsCompleted = 0;
+	// GeneralsX @bugfix rpi5 11/10/2026 The stream's decoder reached the end of the file, and this
+	// pass of a music track was counted before the stream played out.
+	Bool m_decodeReachedEnd = false;
+	Bool m_loopCountedEarly = false;
 
 	PlayingAudio() :
 		m_type(PAT_INVALID),

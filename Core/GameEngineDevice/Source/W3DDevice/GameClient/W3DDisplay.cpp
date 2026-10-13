@@ -92,6 +92,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WWMath/wwmath.h"
 #include "WWLib/registry.h"
+#include "WWLib/frametime.h"
 #include "WW3D2/ww3d.h"
 #include "WW3D2/predlod.h"
 #include "WW3D2/part_emt.h"
@@ -586,12 +587,69 @@ static void SDL3_CenterWindowOnCurrentDisplay(SDL_Window* window, Int width, Int
 	}
 }
 
+// GeneralsX @bugfix rpi5 11/10/2026 Pick an exclusive fullscreen mode with the monitor's own aspect
+// ratio. Switching a 3440x1440 ultrawide to 1024x768 made the monitor stretch the 4:3 picture across
+// the whole panel. A mode with the desktop's shape (2560x1080 on a 21:9 panel, say) keeps the cost low
+// and lets the pillarbox in DX8Wrapper center the game image with black bars, as desktop fullscreen
+// does. Prefers the smallest such mode at least as tall as the render size, below the monitor's largest
+// (native) mode. Falls back to the closest mode to the render size when the monitor offers no such
+// mode.
+static bool SDL3_PickExclusiveFullscreenMode(SDL_DisplayID displayId, Int renderWidth, Int renderHeight,
+	SDL_DisplayMode& outMode)
+{
+	const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(displayId);
+	if (desktop && desktop->w > 0 && desktop->h > 0 && renderWidth > 0 && renderHeight > 0) {
+		const float desktopAspect = (float)desktop->w / (float)desktop->h;
+		const float renderAspect = (float)renderWidth / (float)renderHeight;
+		const float tolerance = 0.03f;
+		if (fabsf(renderAspect - desktopAspect) > desktopAspect * tolerance) {
+			int count = 0;
+			SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(displayId, &count);
+			const SDL_DisplayMode* best = nullptr;
+			int nativeWidth = 0;
+			for (int i = 0; modes && i < count; ++i) {
+				if (modes[i]->w > nativeWidth) nativeWidth = modes[i]->w;
+			}
+			for (int i = 0; modes && i < count; ++i) {
+				const SDL_DisplayMode* m = modes[i];
+				if (m->w <= 0 || m->h <= 0 || m->w >= nativeWidth) continue;
+				const float aspect = (float)m->w / (float)m->h;
+				if (fabsf(aspect - desktopAspect) > desktopAspect * tolerance) continue;
+				if (!best) { best = m; continue; }
+				const bool bestTallEnough = best->h >= renderHeight;
+				const bool tallEnough = m->h >= renderHeight;
+				if (tallEnough != bestTallEnough) {
+					if (tallEnough) best = m;
+				}
+				else if (m->h != best->h) {
+					// Among tall enough modes take the smallest, otherwise the tallest.
+					if (tallEnough ? (m->h < best->h) : (m->h > best->h)) best = m;
+				}
+				else if (fabsf(m->refresh_rate - desktop->refresh_rate) <
+					fabsf(best->refresh_rate - desktop->refresh_rate)) {
+					best = m;
+				}
+			}
+			if (best) {
+				outMode = *best;
+				SDL_free(modes);
+				return true;
+			}
+			SDL_free(modes);
+			fprintf(stderr, "INFO: no %dx%d-shaped display mode below the native size; the monitor will "
+				"stretch %dx%d\n", desktop->w, desktop->h, renderWidth, renderHeight);
+		}
+	}
+	return SDL_GetClosestFullscreenDisplayMode(displayId, renderWidth, renderHeight, 0.0f, false, &outMode);
+}
+
 // GeneralsX @bugfix GitHub Copilot 27/04/2026 Apply SDL3 window sizing/fullscreen only after the final render resolution is known.
 static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, Int renderHeight)
 {
 	extern SDL_Window* TheSDL3Window;
 	if (!TheSDL3Window) return;
 
+	bool displayModeChanges = false;
 	if (!windowed) {
 		if (!SDL_SetWindowFullscreen(TheSDL3Window, false)) {
 			fprintf(stderr, "WARNING: SDL_SetWindowFullscreen(false) failed: %s\n", SDL_GetError());
@@ -599,7 +657,30 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 
 		SDL_DisplayID displayId = SDL_GetDisplayForWindow(TheSDL3Window);
 		const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(displayId);
-		if (mode) {
+		// GeneralsX @feature rpi5 11/10/2026 Optional exclusive fullscreen. Desktop fullscreen keeps the
+		// display at its native size, so DXVK scales every frame up to it: 3440x1440 is over six times
+		// the pixels of 1024x768, which cost a Raspberry Pi 5 about half its frame rate. With
+		// GENERALSX_EXCLUSIVE_FULLSCREEN=1 the display switches to the closest mode to the render
+		// resolution instead (SDL restores the desktop mode on exit), and the monitor does the scaling.
+		const char* exclusiveEnv = getenv("GENERALSX_EXCLUSIVE_FULLSCREEN");
+		const bool wantExclusive = exclusiveEnv && exclusiveEnv[0] == '1';
+		SDL_DisplayMode exclusiveMode{};
+		if (wantExclusive && displayId != 0 &&
+			SDL3_PickExclusiveFullscreenMode(displayId, renderWidth, renderHeight, exclusiveMode)) {
+			fprintf(stderr, "INFO: Exclusive fullscreen %dx%d@%.2f for render size %dx%d\n",
+				exclusiveMode.w, exclusiveMode.h, exclusiveMode.refresh_rate, renderWidth, renderHeight);
+			if (!SDL_SetWindowFullscreenMode(TheSDL3Window, &exclusiveMode)) {
+				fprintf(stderr, "WARNING: SDL_SetWindowFullscreenMode(exclusive) failed: %s\n", SDL_GetError());
+			}
+			else if (!mode || mode->w != exclusiveMode.w || mode->h != exclusiveMode.h) {
+				displayModeChanges = true;
+			}
+		}
+		else if (mode) {
+			if (wantExclusive) {
+				fprintf(stderr, "WARNING: no display mode close to %dx%d, using desktop fullscreen: %s\n",
+					renderWidth, renderHeight, SDL_GetError());
+			}
 			// GeneralsX @bugfix MrMeeseeks 02/07/2026 Pass nullptr to request Desktop Fullscreen (Spaces) instead of Exclusive mode.
 			if (!SDL_SetWindowFullscreenMode(TheSDL3Window, nullptr)) {
 				fprintf(stderr, "WARNING: SDL_SetWindowFullscreenMode(nullptr) failed: %s\n", SDL_GetError());
@@ -646,6 +727,23 @@ static void SDL3_ApplyWindowModeForRenderConfig(Bool windowed, Int renderWidth, 
 			fprintf(stderr, "WARNING: SDL_SetWindowFullscreen(true) failed: %s\n", SDL_GetError());
 		}
 		SDL3_EnsureNativeFullscreen(TheSDL3Window);
+	}
+
+	// GeneralsX @bugfix rpi5 11/10/2026 A monitor shows nothing for a second or two while it re-syncs
+	// to a new display mode, and there is no event for when it is done. Starting the intro straight
+	// after an exclusive mode switch played the EA logo movie to a blank screen (only its audio came
+	// through), so wait for the monitor here, before anything is drawn. GENERALSX_MODE_SWITCH_SETTLE_MS
+	// overrides the wait.
+	if (displayModeChanges) {
+		Uint64 settleMs = 2000;
+		const char* settleEnv = getenv("GENERALSX_MODE_SWITCH_SETTLE_MS");
+		if (settleEnv && settleEnv[0] != '\0')
+			settleMs = (Uint64)strtoul(settleEnv, nullptr, 10);
+		const Uint64 until = SDL_GetTicks() + settleMs;
+		while (SDL_GetTicks() < until) {
+			SDL_PumpEvents();
+			SDL_Delay(10);
+		}
 	}
 }
 #endif
@@ -1215,6 +1313,242 @@ void W3DDisplay::reset()
 
 const UnsignedInt START_CUMU_FRAME = LOGICFRAMES_PER_SECOND / 2;	// skip first half-sec
 
+// GeneralsX @feature Claude 12/10/2026 Measured frame rate in the console log.
+// With GENERALSX_FPS_LOG=<seconds> set, the console log gets a line with the average and worst frame
+// rate every <seconds>, and a summary (average, 1% low, worst frame) when a match ends. This gives
+// real numbers from play sessions without a debug build or an overlay.
+// Each line also splits the frame time into its parts (see WWLib/frametime.h), for the average frame
+// and for the worst one, and gives the draw calls per frame, so it shows where the time goes.
+namespace
+{
+	enum { FPS_LOG_BUCKETS = 1000 };	// frame time histogram in 1 ms steps; longer frames go in the last one
+
+	// Where a frame's time went, in seconds.
+	struct FrameParts
+	{
+		Real logic = 0.0f;		// simulation
+		Real client = 0.0f;		// client update without drawing: drawables, particles, UI
+		Real draw = 0.0f;		// building the frame on the CPU (W3DDisplay::draw without present)
+		Real present = 0.0f;	// end of scene and Present: waiting for the GPU
+		Real audio = 0.0f;
+		Real network = 0.0f;
+		Real pacing = 0.0f;		// frame rate cap
+		Real other = 0.0f;		// the rest: window events, radar, message dispatch
+		Real drawCalls = 0.0f;
+
+		void add(const FrameParts &parts)
+		{
+			logic += parts.logic;
+			client += parts.client;
+			draw += parts.draw;
+			present += parts.present;
+			audio += parts.audio;
+			network += parts.network;
+			pacing += parts.pacing;
+			other += parts.other;
+			drawCalls += parts.drawCalls;
+		}
+
+		// Prints the parts divided by frames, as milliseconds per frame.
+		void print(const char *label, Real frames) const
+		{
+			if (frames <= 0.0f)
+				return;
+			const Real ms = 1000.0f / frames;
+			fprintf(stderr, "[FPS]   %s: logic %.1f ms, client %.1f ms, draw %.1f ms, present %.1f ms, audio %.1f ms, network %.1f ms, fps cap %.1f ms, other %.1f ms, %.0f draw calls\n",
+				label, logic * ms, client * ms, draw * ms, present * ms, audio * ms, network * ms, pacing * ms, other * ms,
+				drawCalls / frames);
+		}
+	};
+
+	// Takes the time the main loop recorded since the last frame.
+	FrameParts takeFrameParts(Real elapsedSeconds)
+	{
+		FrameParts parts;
+		parts.logic = (Real)FrameTime::Take(FrameTime::PART_LOGIC);
+		parts.present = (Real)FrameTime::Take(FrameTime::PART_PRESENT);
+		const Real drawTotal = (Real)FrameTime::Take(FrameTime::PART_DRAW);
+		parts.draw = drawTotal - parts.present;
+		parts.client = (Real)FrameTime::Take(FrameTime::PART_CLIENT) - drawTotal;
+		parts.audio = (Real)FrameTime::Take(FrameTime::PART_AUDIO);
+		parts.network = (Real)FrameTime::Take(FrameTime::PART_NETWORK);
+		parts.pacing = (Real)FrameTime::Take(FrameTime::PART_PACING);
+		if (parts.draw < 0.0f)
+			parts.draw = 0.0f;
+		if (parts.client < 0.0f)
+			parts.client = 0.0f;
+		parts.other = elapsedSeconds - parts.logic - parts.client - parts.draw - parts.present - parts.audio
+			- parts.network - parts.pacing;
+		if (parts.other < 0.0f)
+			parts.other = 0.0f;
+		parts.drawCalls = (Real)DX8Wrapper::Get_Last_Frame_Statistics().draw_calls;
+		return parts;
+	}
+
+	// CPU time used by the calling (main) thread, or a negative value where it is not available.
+	// Comparing it with the wall time shows whether slow frames are busy or waiting (e.g. on DXVK).
+	double fpsLogThreadCpuSeconds()
+	{
+#ifdef CLOCK_THREAD_CPUTIME_ID
+		timespec ts;
+		if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0)
+			return (double)ts.tv_sec + (double)ts.tv_nsec * 1.0e-9;
+#endif
+		return -1.0;
+	}
+
+	struct FpsLog
+	{
+		Int intervalSecs = -1;	// -1 = not read yet, 0 = off
+		// current interval
+		double intervalCpuStart = -1.0;
+		Real intervalTime = 0.0f;
+		Int intervalFrames = 0;
+		Real intervalWorstFrame = 0.0f;
+		FrameParts intervalParts;
+		FrameParts intervalWorstParts;
+		// current match
+		Bool inMatch = false;
+		const char *matchKind = "";
+		Real matchTime = 0.0f;
+		Int matchFrames = 0;
+		Real matchWorstFrame = 0.0f;
+		FrameParts matchParts;
+		UnsignedInt matchHistogram[FPS_LOG_BUCKETS] = {0};
+	};
+
+	FpsLog s_fpsLog;
+
+	const char *fpsLogMatchKind()
+	{
+		if (TheGameLogic == nullptr || !TheGameLogic->isInGame() || TheGameLogic->isInShellGame())
+			return nullptr;
+		if (TheGameLogic->isInReplayGame())
+			return "replay";
+		if (TheGameLogic->isInMultiplayerGame())
+			return "multiplayer";
+		if (TheGameLogic->isInSkirmishGame())
+			return "skirmish";
+		return "campaign";
+	}
+
+	void fpsLogEndMatch()
+	{
+		FpsLog &log = s_fpsLog;
+		if (log.matchFrames > 0 && log.matchTime > 0.0f)
+		{
+			// 1% low: the frame rate of the slowest 1% of frames.
+			const UnsignedInt slowFrames = (UnsignedInt)log.matchFrames / 100 + 1;
+			UnsignedInt counted = 0;
+			Int bucket = FPS_LOG_BUCKETS - 1;
+			for (; bucket > 0; --bucket)
+			{
+				counted += log.matchHistogram[bucket];
+				if (counted >= slowFrames)
+					break;
+			}
+			const Real onePercentLow = 1000.0f / (Real)(bucket + 1);
+			fprintf(stderr, "[FPS] match summary (%s, %s): %.0f s, %d frames, average %.1f FPS, 1%% low %.1f FPS, worst frame %.0f ms\n",
+				log.matchKind, TheGlobalData->m_mapName.str(), log.matchTime, log.matchFrames,
+				(Real)log.matchFrames / log.matchTime, onePercentLow, log.matchWorstFrame * 1000.0f);
+			log.matchParts.print("average frame", (Real)log.matchFrames);
+			fflush(stderr);
+		}
+		log.inMatch = false;
+		log.matchTime = 0.0f;
+		log.matchFrames = 0;
+		log.matchWorstFrame = 0.0f;
+		log.matchParts = FrameParts();
+		memset(log.matchHistogram, 0, sizeof(log.matchHistogram));
+	}
+
+	void fpsLogFrame(Real elapsedSeconds)
+	{
+		FpsLog &log = s_fpsLog;
+		if (log.intervalSecs < 0)
+		{
+			const char *value = getenv("GENERALSX_FPS_LOG");
+			log.intervalSecs = value ? atoi(value) : 0;
+			if (log.intervalSecs < 0)
+				log.intervalSecs = 0;
+		}
+		if (log.intervalSecs == 0)
+			return;
+
+		const FrameParts parts = takeFrameParts(elapsedSeconds);
+
+		// Skip the first call and long stalls (loading screens), which are not rendered frames.
+		if (elapsedSeconds <= 0.0f || elapsedSeconds > 2.0f)
+			return;
+
+		const char *kind = fpsLogMatchKind();
+		if (log.inMatch && kind == nullptr)
+			fpsLogEndMatch();
+		else if (!log.inMatch && kind != nullptr)
+		{
+			log.inMatch = true;
+			log.matchKind = kind;
+		}
+
+		// Paused frames say nothing about how the game runs.
+		if (log.inMatch && !TheGameLogic->isGamePaused())
+		{
+			log.matchTime += elapsedSeconds;
+			log.matchFrames++;
+			if (elapsedSeconds > log.matchWorstFrame)
+				log.matchWorstFrame = elapsedSeconds;
+			log.matchParts.add(parts);
+			Int bucket = (Int)(elapsedSeconds * 1000.0f);
+			if (bucket >= FPS_LOG_BUCKETS)
+				bucket = FPS_LOG_BUCKETS - 1;
+			log.matchHistogram[bucket]++;
+		}
+
+		log.intervalTime += elapsedSeconds;
+		log.intervalFrames++;
+		log.intervalParts.add(parts);
+		if (elapsedSeconds > log.intervalWorstFrame)
+		{
+			log.intervalWorstFrame = elapsedSeconds;
+			log.intervalWorstParts = parts;
+		}
+		if (log.intervalTime >= (Real)log.intervalSecs)
+		{
+			fprintf(stderr, "[FPS] %s: average %.1f FPS, worst frame %.0f ms (%d frames in %.1f s)\n",
+				log.inMatch ? log.matchKind : "menu", (Real)log.intervalFrames / log.intervalTime,
+				log.intervalWorstFrame * 1000.0f, log.intervalFrames, log.intervalTime);
+			log.intervalParts.print("average frame", (Real)log.intervalFrames);
+			log.intervalWorstParts.print("worst frame", 1.0f);
+			// GeneralsX @performance Claude 13/10/2026 Busy share of the main thread, particle count and
+			// detail levels, to tell what changes when the frame rate steps up or down mid-game.
+			const double cpuNow = fpsLogThreadCpuSeconds();
+			const Int busyPercent = (log.intervalCpuStart >= 0.0 && cpuNow >= 0.0)
+				? (Int)((cpuNow - log.intervalCpuStart) * 100.0 / log.intervalTime + 0.5) : -1;
+			log.intervalCpuStart = cpuNow;
+			const char *staticLod = "?";
+			const char *dynamicLod = "?";
+			if (TheGameLODManager)
+			{
+				const StaticGameLODLevel staticLevel = TheGameLODManager->getStaticLODLevel();
+				const DynamicGameLODLevel dynamicLevel = TheGameLODManager->getDynamicLODLevel();
+				if (staticLevel >= 0 && staticLevel < STATIC_GAME_LOD_COUNT)
+					staticLod = TheGameLODManager->getStaticGameLODLevelName(staticLevel);
+				if (dynamicLevel >= 0 && dynamicLevel < DYNAMIC_GAME_LOD_COUNT)
+					dynamicLod = TheGameLODManager->getDynamicGameLODLevelName(dynamicLevel);
+			}
+			fprintf(stderr, "[FPS]   main thread busy %d%%, %u particles, detail %s, dynamic detail %s\n",
+				busyPercent, TheParticleSystemManager ? TheParticleSystemManager->getParticleCount() : 0u,
+				staticLod, dynamicLod);
+			fflush(stderr);
+			log.intervalTime = 0.0f;
+			log.intervalFrames = 0;
+			log.intervalWorstFrame = 0.0f;
+			log.intervalParts = FrameParts();
+			log.intervalWorstParts = FrameParts();
+		}
+	}
+}
+
 void W3DDisplay::updateAverageFPS()
 {
 	constexpr const Int FPS_HISTORY_SIZE = 30;
@@ -1244,6 +1578,9 @@ void W3DDisplay::updateAverageFPS()
 
 	m_currentFPS = 1.0f/elapsedSeconds;
 	fpsHistory[historyOffset++] = m_currentFPS;
+
+	if (lastUpdateTime64 != 0)
+		fpsLogFrame(elapsedSeconds);
 
 	// determine average frame rate over our past history.
 	const Real sum = std::accumulate(fpsHistory, fpsHistory + FPS_HISTORY_SIZE, 0.0f);
@@ -2050,6 +2387,9 @@ void W3DDisplay::step()
 void W3DDisplay::draw()
 {
 	//USE_PERF_TIMER(W3DDisplay_draw)
+
+	// GeneralsX @feature Claude 12/10/2026 Time the frame build for the GENERALSX_FPS_LOG frame breakdown.
+	FrameTime::Scope drawTime(FrameTime::PART_DRAW);
 
 	// GeneralsX @feature xxorza 15/04/2026 Process deferred window resize for pillarbox
 	DX8Wrapper::Pillarbox_Process_Resize();

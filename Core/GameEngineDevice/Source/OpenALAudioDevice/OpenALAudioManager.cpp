@@ -802,8 +802,12 @@ void OpenALAudioManager::playAudioEvent(AudioRequest* req)
 		if (!handleToKill || foundSoundToReplace) {
 			stream = new OpenALAudioStream;
 			// When we need more data ask FFmpeg for more data.
-			stream->setRequireDataCallback([ffmpegFile, stream]() {
-				ffmpegFile->decodePacket();
+			// GeneralsX @bugfix rpi5 11/10/2026 Note when the decoder reaches the end of the file, so a
+			// music loop can be counted before the stream has played out (see processPlayingList).
+			PlayingAudio* owner = audio;
+			stream->setRequireDataCallback([ffmpegFile, owner]() {
+				if (!ffmpegFile->decodePacket())
+					owner->m_decodeReachedEnd = true;
 				});
 			
 			// When we receive a frame from FFmpeg, send it to OpenAL.
@@ -1510,11 +1514,10 @@ Bool OpenALAudioManager::hasMusicTrackCompleted(const AsciiString& trackName, In
 		playing = *it;
 		// GeneralsX @bugfix BenderAI 11/03/2026 - guard against null audioEventRTS/info
 		const AudioEventInfo* info = (playing && playing->m_audioEventRTS) ? playing->m_audioEventRTS->getAudioEventInfo() : nullptr;
-		if (info && info->m_soundType == AT_Music) {
+		if (info && info->m_soundType == AT_Music && !playing->m_requestStop) {
 			if (playing->m_audioEventRTS->getEventName() == trackName) {
-				//if (INFINITE_LOOP_COUNT - AIL_stream_loop_count(playing->m_stream) >= numberOfTimes) {
-				// return TRUE;
-				//}
+				// GeneralsX @bugfix rpi5 11/10/2026 Mirror Miles' loop count check
+				return playing->m_loopsCompleted >= numberOfTimes;
 			}
 		}
 	}
@@ -2548,6 +2551,29 @@ void OpenALAudioManager::processPlayingList(void)
 		}
 		playing->m_stream->update();
 
+		// GeneralsX @bugfix rpi5 11/10/2026 Count a music loop once the decoder has reached the end of
+		// the file, as Miles counts when its stream reader wraps. Map scripts react by fading the
+		// track out and starting the next one; counting only after the restart made that fade play
+		// over the start of the next loop, so the track was heard starting again.
+		const AudioEventInfo* loopInfo = playing->m_audioEventRTS ? playing->m_audioEventRTS->getAudioEventInfo() : nullptr;
+		if (playing->m_decodeReachedEnd && !playing->m_loopCountedEarly && loopInfo && loopInfo->m_soundType == AT_Music)
+		{
+			++playing->m_loopsCompleted;
+			playing->m_loopCountedEarly = true;
+		}
+
+		// GeneralsX @bugfix rpi5 11/10/2026 Loop music until it is stopped, as Miles does with
+		// INFINITE_LOOP_COUNT. Map scripts move to the next track via hasMusicTrackCompleted();
+		// without looping a track played once and the music then stayed silent.
+		if (playing->m_stream && sourceIsStopped(playing->m_stream->getSource()) && restartMusicStream(playing))
+		{
+			if (!playing->m_loopCountedEarly)
+				++playing->m_loopsCompleted;
+			playing->m_loopCountedEarly = false;
+			++it;
+			continue;
+		}
+
 		// After update(), if stream source is still stopped there is no more data — release it.
 		if (playing->m_stream && sourceIsStopped(playing->m_stream->getSource()))
 		{
@@ -2578,6 +2604,31 @@ void OpenALAudioManager::processPlayingList(void)
 }
 
 
+
+//-------------------------------------------------------------------------------------------------
+// GeneralsX @bugfix rpi5 11/10/2026 Rewind a finished music stream by reopening its file.
+Bool OpenALAudioManager::restartMusicStream(PlayingAudio* playing)
+{
+	if (playing->m_requestStop || !playing->m_ffmpegFile || !playing->m_audioEventRTS)
+		return FALSE;
+	const AudioEventInfo* info = playing->m_audioEventRTS->getAudioEventInfo();
+	if (!info || info->m_soundType != AT_Music)
+		return FALSE;
+
+	File* file = TheFileSystem->openFile(playing->m_audioEventRTS->getFilename().str());
+	if (!file)
+		return FALSE;
+
+	// The frame callback that feeds the OpenAL stream survives close()/open().
+	playing->m_ffmpegFile->close();
+	if (!playing->m_ffmpegFile->open(file))
+		return FALSE;
+	playing->m_decodeReachedEnd = false;
+
+	playing->m_stream->reset();
+	playing->m_stream->update();
+	return !sourceIsStopped(playing->m_stream->getSource());
+}
 
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::processFadingList(void)

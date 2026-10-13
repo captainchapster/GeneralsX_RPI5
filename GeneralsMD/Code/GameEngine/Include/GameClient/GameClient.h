@@ -157,6 +157,7 @@ public:
 	virtual void notifyTerrainObjectMoved(Object *obj) = 0;
 
 	Bool skipCurrentIntroStage();
+	Bool isIntroPlaying() const;
 
 	static Bool isMovieAbortRequested();
 
