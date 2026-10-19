@@ -72,7 +72,10 @@ include(cmake/dx8.cmake)
 # Linux/macOS port: Make DXVK headers accessible globally so Core libraries
 # (Debug, WWLib, WWMath, etc.) can access platform compatibility and Windows base types
 if(UNIX)
-    if(APPLE)
+    # GeneralsX @build rpi5 19/10/2026 The Linux DXVK source build (Raspberry Pi 5) has the same
+    # include/native layout as macOS. core_libraries (Debug.cpp) does not link d3d8lib, so it needs
+    # these global paths to find windows_base.h.
+    if(APPLE OR SAGE_DXVK_FROM_SOURCE)
         include_directories(
             ${dxvk_SOURCE_DIR}/include/native
             ${dxvk_SOURCE_DIR}/include/native/windows
