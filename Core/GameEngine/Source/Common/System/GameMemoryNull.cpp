@@ -18,6 +18,8 @@
 
 #include "PreRTS.h"
 
+#ifdef DISABLE_GAMEMEMORY
+
 // GeneralsX @bugfix BenderAI 24/02/2026 Phase 5 - malloc.h not on macOS
 #ifdef __APPLE__
 #include <stdlib.h>
@@ -25,7 +27,7 @@
 #include <malloc.h>
 #endif
 
-#include "Common/GameMemoryNull.h"
+#include "Common/GameMemory.h"
 
 static Bool theMainInitFlag = false;
 
@@ -114,10 +116,12 @@ void initMemoryManager()
 {
 	if (TheMemoryPoolFactory == nullptr && TheDynamicMemoryAllocator == nullptr)
 	{
-		TheMemoryPoolFactory = new (malloc(sizeof MemoryPoolFactory)) MemoryPoolFactory;
-		TheDynamicMemoryAllocator = new (malloc(sizeof DynamicMemoryAllocator)) DynamicMemoryAllocator;
+		// GeneralsX @build elmeriniemela 18/10/2026 sizeof on a type needs parentheses; GCC rejects
+		// "sizeof Type" (only built with RTS_GAMEMEMORY_ENABLE=OFF, for example with ASan).
+		TheMemoryPoolFactory = new (malloc(sizeof(MemoryPoolFactory))) MemoryPoolFactory;
+		TheDynamicMemoryAllocator = new (malloc(sizeof(DynamicMemoryAllocator))) DynamicMemoryAllocator;
 
-		DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
+		GAME_DEBUG_INIT(DEBUG_FLAGS_DEFAULT);
 		DEBUG_LOG(("*** Initialized the Null Memory Manager"));
 	}
 	else
@@ -230,4 +234,6 @@ void __cdecl operator delete[](void *p, const char *, int)
 	free(p);
 }
 
-#endif
+#endif // DISABLE_GAMEMEMORY_NEW_OPERATORS
+
+#endif // DISABLE_GAMEMEMORY

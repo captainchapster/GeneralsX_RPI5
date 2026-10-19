@@ -50,6 +50,8 @@ struct PlayingAudio
 	PlayingAudioType m_type;
 	RefCountPtr<DynamicAudioEventRTS> m_audioEventRTS;
 	Bool m_requestStop;
+	// GeneralsX @bugfix elmeriniemela 17/10/2026 Paused by pauseAudio(), not finished.
+	Bool m_paused;
 	Int m_framesFaded;
 	// GeneralsX @bugfix rpi5 11/10/2026 Music loops like Miles (INFINITE_LOOP_COUNT); these track
 	// completed loops for hasMusicTrackCompleted().
@@ -67,8 +69,6 @@ struct PlayingAudio
 	ma_audio_buffer* m_queuedBuffer;
 	Bool m_nextLoopPrepared;
 	Bool m_queueFailed;
-	// GeneralsX @bugfix Claude 13/10/2026 Stopped by pauseAudio(); resumeAudio() starts it again.
-	Bool m_paused;
 
 	PlayingAudio() :
 		m_sound(NULL),
@@ -76,6 +76,7 @@ struct PlayingAudio
 		m_type(PAT_INVALID),
 		m_audioEventRTS(NULL),
 		m_requestStop(false),
+		m_paused(false),
 		m_framesFaded(0),
 		m_loopsCompleted(0),
 		m_lastCursor(0),
@@ -83,8 +84,7 @@ struct PlayingAudio
 		m_currentBuffer(NULL),
 		m_queuedBuffer(NULL),
 		m_nextLoopPrepared(false),
-		m_queueFailed(false),
-		m_paused(false)
+		m_queueFailed(false)
 	{ }
 };
 
@@ -241,7 +241,6 @@ protected:
 	void playAudioEvent(AudioRequest *req);
 	void stopAudioEvent(AudioHandle handle);
 	void pauseAudioEvent(AudioHandle handle);
-	static AudioAffect getAudioAffect(const PlayingAudio *playing);
 
 	PlayingAudio *allocatePlayingAudio(void);
 	void releaseMiniAudioHandles(PlayingAudio *release);
