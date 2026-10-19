@@ -48,7 +48,10 @@ if(WIN32)
     )
 else()
     add_library(core_debug INTERFACE)
-    target_include_directories(core_debug INTERFACE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Include
+    # GeneralsX @build rpi5 19/10/2026 libstdc++ includes its own <debug/debug.h> from <string> and
+    # friends, so an -I path to Include/debug/debug.h shadows it and breaks the standard headers.
+    # Only quoted includes ("debug/debug.h") use these headers, so pass the folder with -iquote.
+    target_compile_options(core_debug INTERFACE
+        "SHELL:-iquote ${CMAKE_CURRENT_SOURCE_DIR}/Include"
     )
 endif()
