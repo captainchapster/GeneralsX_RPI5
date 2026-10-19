@@ -161,6 +161,28 @@ if [[ -f "${EXTRAS_WND_SRC}" ]]; then
     cp -v "${EXTRAS_WND_SRC}" "${RUNTIME_DIR}/Window/Menus/ExtrasMenu.wnd"
 fi
 
+# GeneralsX @feature fbraz3 08/10/2026 Deploy FXListGeneralsX.ini for dynamic explosion & superweapon lights
+FXLIST_GENERALSX_SRC="${PROJECT_ROOT}/GeneralsZH/Data/INI/FXListGeneralsX.ini"
+if [[ -f "${FXLIST_GENERALSX_SRC}" ]]; then
+    mkdir -p "${RUNTIME_DIR}/Data/INI"
+    cp -v "${FXLIST_GENERALSX_SRC}" "${RUNTIME_DIR}/Data/INI/FXListGeneralsX.ini"
+fi
+
+# GeneralsX @bugfix felipebraz 16/10/2026 Symlink Data/Cursors into runtime dir if present in asset path
+ZH_ASSET_DIR="${CNC_GENERALS_ZH_PATH:-}"
+if [[ -z "${ZH_ASSET_DIR}" || ! -d "${ZH_ASSET_DIR}/Data/Cursors" ]]; then
+    ZH_ASSET_DIR="${HOME}/GeneralsX/data/GeneralsZH"
+fi
+if [[ -d "${ZH_ASSET_DIR}/Data/Cursors" ]]; then
+    ZH_ASSET_DIR="$(cd "${ZH_ASSET_DIR}" && pwd)"
+    mkdir -p "${RUNTIME_DIR}/Data"
+    # GeneralsX @bugfix felipebraz 17/10/2026 Refresh cursor symlink on deployment while preserving user-managed directory
+    if [[ -L "${RUNTIME_DIR}/Data/Cursors" || ! -e "${RUNTIME_DIR}/Data/Cursors" ]]; then
+        ln -sfn "${ZH_ASSET_DIR}/Data/Cursors" "${RUNTIME_DIR}/Data/Cursors"
+        echo "  Symlinked Data/Cursors from ${ZH_ASSET_DIR}/Data/Cursors"
+    fi
+fi
+
 # GeneralsX @bugfix Copilot 24/03/2026 Deploy Fontconfig config into runtime dir so FreeType/Fontconfig can resolve fonts on macOS.
 # GeneralsX @bugfix BenderAI 24/03/2026 Guard Fontconfig conf.d copy so missing directory does not abort deploy under set -e.
 echo "  Deploying Fontconfig config & fonts..."
@@ -242,7 +264,7 @@ fi
 # Data/INI/Default/...) relative to the binary's cwd. Without this cd, anything
 # launched via absolute path (Finder, gtimeout, full-path invocation) misses
 # every loose INI / asset and only sees what is bundled inside the BIG files.
-cd "\${SCRIPT_DIR}"
+cd "\${SCRIPT_DIR}" || exit 1
 
 LOG_FILE="\${SCRIPT_DIR}/game.log"
 "./GeneralsXZH" "\$@" 2>&1 | grep --line-buffered -v "Unimplemented render state D3DRS_PATCHSEGMENTS" | grep --line-buffered -v "No accelerated colorspace conversion" | tee "\${LOG_FILE}"

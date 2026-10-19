@@ -86,6 +86,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/W3DVideoBuffer.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
+#include "W3DDevice/GameClient/W3DPostProcess.h"
 #include "W3DDevice/GameClient/W3DDebugDisplay.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DScreenshot.h"
@@ -94,6 +95,7 @@ static void drawFramerateBar();
 #include "WWLib/registry.h"
 #include "WWLib/frametime.h"
 #include "WW3D2/ww3d.h"
+#include "WW3D2/Renderer.h"
 #include "WW3D2/predlod.h"
 #include "WW3D2/part_emt.h"
 #include "WW3D2/part_ldr.h"
@@ -486,7 +488,14 @@ W3DDisplay::~W3DDisplay()
 	// shutdown
 	Debug_Statistics::Shutdown_Statistics();
 	if (!TheGlobalData->m_headless)
+	{
+		if (TheW3DPostProcess)
+		{
+			delete TheW3DPostProcess;
+			TheW3DPostProcess = nullptr;
+		}
 		W3DShaderManager::shutdown();
+	}
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
 	if (!TheGlobalData->m_headless)
@@ -803,7 +812,7 @@ void W3DDisplay::setGamma(Real gamma, Real bright, Real contrast, Bool calibrate
 	if (m_windowed)
 		return;	//we don't allow gamma to change in window because it would affect desktop.
 
-	DX8Wrapper::Set_Gamma(gamma,bright,contrast,calibrate, false);
+	Renderer::Set_Gamma(gamma,bright,contrast,calibrate, false);
 }
 
 /** Set resolution of display */
@@ -822,6 +831,12 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 		#endif
 		Render2DClass::Set_Screen_Resolution(RectClass(0, 0, xres, yres));
 		Display::setDisplayMode(xres, yres, bitdepth, windowed);
+
+		// TheSuperHackers @tweak Font point sizes are scaled from the resolution, so every glyph
+		// cached for the old resolution is now dead weight. Discard the current glyphs and start
+		// with a clean slate.
+		WW3DAssetManager::Get_Instance()->Free_All_FontChars_Glyph_Caches();
+
 		return TRUE;
 	}
 
@@ -1242,6 +1257,9 @@ void W3DDisplay::init()
 		init3DScene();
 		W3DShaderManager::init();
 
+		TheW3DPostProcess = NEW W3DPostProcess;
+		TheW3DPostProcess->init();
+
 		// Create and initialize the debug display
 		m_nativeDebugDisplay = NEW W3DDebugDisplay();
 		m_debugDisplay = m_nativeDebugDisplay;
@@ -1284,6 +1302,15 @@ void W3DDisplay::reset()
 {
 
 	Display::reset();
+
+	if (TheW3DPostProcess)
+	{
+		TheW3DPostProcess->reset();
+	}
+
+	// TheSuperHackers @tweak Discard the current glyphs and start with a clean slate.
+	// This can reduce the memory overhead from glyphs that are no longer needed from here on.
+	WW3DAssetManager::Get_Instance()->Free_All_FontChars_Glyph_Caches();
 
 	// Remove all render objects.
 
@@ -2018,6 +2045,12 @@ void W3DDisplay::gatherDebugStats()
 		unibuffer.format( L"Particles: %d in world, %d being displayed", totalParticles, onScreenParticleCount );
 		m_displayStrings[Particles]->setText( unibuffer );
 
+		//display the terrain-conforming particle load
+		unibuffer.format( L"Terrain Particles: %d tris, %d draws",
+			Debug_Statistics::Get_Terrain_Particle_Triangles(),
+			Debug_Statistics::Get_Terrain_Particle_Batches() );
+		m_displayStrings[TerrainParticles]->setText( unibuffer );
+
 		//display the number of objects in the world
 		UnsignedInt objCount = TheGameLogic->getObjectCount();
 		UnsignedInt objScreenCount = TheGameClient->getRenderedObjectCount();
@@ -2535,7 +2568,8 @@ AGAIN:
 
 			TheParticleSystemManager->DRAW();
 
-			if (TheWaterRenderObj && TheGlobalData->m_waterType == 2)
+			// GeneralsX @feature fbraz3 08/10/2026 Update water render target for all water types (Reforged pattern)
+			if (TheWaterRenderObj)
 				TheWaterRenderObj->updateRenderTargetTextures(primaryW3DView->get3DCamera());	//do a render into each texture
 
 			//Can't render into textures while rendering to screen so these textures need to be updated
@@ -2579,8 +2613,20 @@ AGAIN:
 				if (numRenderTargetPolygons || numRenderTargetVertices)
 					Debug_Statistics::Record_DX8_Polys_And_Vertices(numRenderTargetPolygons,numRenderTargetVertices,ShaderClass::_PresetOpaqueShader);
 
+				// GeneralsX @feature fbraz3 08/10/2026 Redirect 3D world rendering to post-processing pipeline
+				if (TheW3DPostProcess)
+				{
+					TheW3DPostProcess->beginScene();
+				}
+
 				// draw all views of the world
 				drawViews();
+
+				// GeneralsX @feature fbraz3 08/10/2026 Apply bloom, HDR tone curve, and FXAA before UI drawing
+				if (TheW3DPostProcess)
+				{
+					TheW3DPostProcess->endSceneAndApply();
+				}
 
 				// draw the user interface
 				TheInGameUI->DRAW();

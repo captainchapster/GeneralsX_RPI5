@@ -276,6 +276,9 @@ Libs:
     BUILD_BYPRODUCTS  ${DXVK_D3D8_LIB} ${DXVK_D3D9_LIB}
     INSTALL_COMMAND   ""
     UPDATE_DISCONNECTED TRUE
+    # dxvk_native_build-configure finishes once the patched sources (and their include/native
+    # headers) exist; cmake/config.cmake orders every compile after it.
+    STEP_TARGETS      configure
   )
 
   # Put the libraries where the prebuilt tarball had them, and next to the game
