@@ -710,15 +710,23 @@ GlobalData::GlobalData()
 	m_shadowsForProjectiles = TRUE;
 	m_shadowsForProps = TRUE;
 	// GeneralsX @feature fbraz3 08/10/2026 Enhanced graphics & lighting toggleable options defaults
-	m_advancedShadows = TRUE;
-	m_advancedLighting = TRUE;
+	// GeneralsX @performance rpi5 19/10/2026 Builds with RTS_BUILD_OPTION_ENHANCED_GRAPHICS=OFF (Raspberry Pi 5)
+	// start with the master switches below off, since the extra shadow, light, reflection and post-process
+	// passes cost the V3D GPU too much frame rate. Players can still turn them on in Options.ini.
+#ifdef RTS_ENHANCED_GRAPHICS_OFF_BY_DEFAULT
+	const Bool enhancedGraphicsDefault = FALSE;
+#else
+	const Bool enhancedGraphicsDefault = TRUE;
+#endif
+	m_advancedShadows = enhancedGraphicsDefault;
+	m_advancedLighting = enhancedGraphicsDefault;
 	m_extendedShadowFrustumCulling = TRUE;
 	m_naturalSunElevation = TRUE;
 	m_bridgeShadows = TRUE;
-	m_waterReflections = TRUE;
+	m_waterReflections = enhancedGraphicsDefault;
 	m_explosionDynamicLights = TRUE;
 	m_vehicleHeadlights = TRUE;
-	m_enablePostProcessing = TRUE;
+	m_enablePostProcessing = enhancedGraphicsDefault;
 	m_postProcessBloom = TRUE;
 	m_postProcessHDR = TRUE;
 	m_postProcessFXAA = FALSE;
