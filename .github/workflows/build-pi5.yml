@@ -73,9 +73,18 @@ jobs:
         run: PREFIX="${MESA_PREFIX}" ./scripts/build/linux/build-pi5-mesa.sh
 
       - name: Build Zero Hour
+        shell: bash
         run: |
+          set -o pipefail
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          ./scripts/build/linux/build-pi5-zh.sh
+          ./scripts/build/linux/build-pi5-zh.sh 2>&1 | tee build-pi5.log
+
+      # The job log only keeps the end of a long build, where the DXVK output usually is.
+      # Show the first failed build steps so the real error is visible.
+      - name: Show build errors
+        if: failure()
+        shell: bash
+        run: grep -n -m 10 -A 30 -E 'FAILED:|error:|Error ' build-pi5.log || tail -n 200 build-pi5.log
 
       - name: Save vcpkg cache
         if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
